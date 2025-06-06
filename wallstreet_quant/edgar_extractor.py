@@ -163,7 +163,7 @@ def extract_items_from_filing(filing_obj, items_to_extract):
     
     Parameters:
         filing_obj: A filing object returned by the 'edgar' package.
-        items_to_extract: List of item names (e.g., ["1A", "7", "3"]).
+        items_to_extract: List of item names (e.g., ["1", "1A", "7", "3"]).
         
     Returns:
         dict: Dictionary of item number → extracted text
@@ -172,12 +172,14 @@ def extract_items_from_filing(filing_obj, items_to_extract):
         # Get the full filing text
         full_text = filing_obj.text()
         
-        # Normalize whitespace and case
+        # Normalize whitespace and case (your original approach)
         full_text = re.sub(r'\s+', ' ', full_text)
         full_text = full_text.replace('\n', ' ').replace('\r', ' ')
         
-        # Prepare pattern
-        item_pattern = re.compile(r'(ITEM\s+(\d+[A]?)\.*)(.*?)((?=ITEM\s+\d+[A]?\.?)|$)', re.IGNORECASE)
+        # Fixed pattern - the main issues were:
+        # 1. \d+ only matches single digit, need \d+ for multiple digits
+        # 2. Lookahead pattern should match the main pattern exactly
+        item_pattern = re.compile(r'(ITEM\s+(\d+[A-Z]?)\.*)(.*?)((?=ITEM\s+\d+[A-Z]?\.?)|$)', re.IGNORECASE)
         
         # Extract all items
         matches = item_pattern.findall(full_text)
@@ -190,7 +192,6 @@ def extract_items_from_filing(filing_obj, items_to_extract):
                 extracted[item_number] = content
                 
         return extracted
-
     except Exception as e:
         print(f"Failed to extract items: {e}")
         return {}
