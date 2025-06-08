@@ -2,8 +2,13 @@ from typing import List, Dict
 from pydantic import BaseModel
 from enum import Enum
 import pandas as pd
-from edgar_ai import *
-from edgar_extractor import extract_items_from_filing
+from tqdm import tqdm
+try:
+    from edgar_ai import *
+    from edgar_extractor import extract_items_from_filing
+except:
+    from wallstreet_quant.edgar_ai import *
+    from wallstreet_quant.edgar_extractor import extract_items_from_filing
 import json
 from openai import OpenAI
 
@@ -15,6 +20,8 @@ client = OpenAI()
 # --------------------------------------------------------------------------- #
 #  SEC-ANALYSIS WRAPPER CLASS                                                 #
 # --------------------------------------------------------------------------- #
+# --- define a consistent placeholder for failed extractions --- #
+EXTRACTION_FAILED = {"error": "could not be extracted"}
 class SecAnalysis:
     """
     High-level orchestrator.  Call an instance with a mapping:
@@ -22,9 +29,9 @@ class SecAnalysis:
     Each filing_obj must expose the minimal attributes accessed below.
     """
 
-    def __call__(self, filings: Dict[str, List[object]]) -> pd.DataFrame:
+    def __call__(self, filings: Dict[str, List[object]], model="gpt-4o") -> pd.DataFrame:
         rows = []
-        for ticker, flist in filings.items():
+        for ticker, flist in tqdm(filings.items()):
             if len(flist) < 2:  # need prev + current
                 raise ValueError(f"{ticker}: need at least two filings (previous & current)")
 
@@ -34,14 +41,54 @@ class SecAnalysis:
             curr = extract_items_from_filing(flist[0], items_needed)   # latest filing
             
             # --- section extractions -------------------------------------- #
-            rf    = risk_factor_analysis(prev['1A'],  curr['1A'])
-            mda   = mdad_analysis(curr['7'])                      # only current MD&A needed here
-            leg   = legal_matters(curr['3'])
-            ctrl  = control_status(curr['9A'])
-            biz   = business_info(prev['1'],    curr['1'])
-            tone  = tone_shift_analysis(prev['7'], curr['7'])
-            strat = strategy_summary_analysis(curr['7'])
-            hc    = human_capital_analysis(curr['1'])             # Item 1 contains "Human Capital Resources"
+            try:
+                rf = risk_factor_analysis(prev['1A'], curr['1A'], model=model)
+            except Exception as e:
+                print(f"{ticker} - Risk Factor Analysis exception: {e}")
+                rf = EXTRACTION_FAILED
+            
+            try:
+                mda = mdad_analysis(curr['7'], model=model)
+            except Exception as e:
+                print(f"{ticker} - MD&A Analysis exception: {e}")
+                mda = EXTRACTION_FAILED
+            
+            try:
+                leg = legal_matters(curr['3'], model=model)
+            except Exception as e:
+                print(f"{ticker} - Legal Matters Analysis exception: {e}")
+                leg = EXTRACTION_FAILED
+
+            try:
+                ctrl = control_status(curr['9A'], model=model)
+            except Exception as e:
+                print(f"{ticker} - Control Status Analysis exception: {e}")
+                ctrl = EXTRACTION_FAILED
+            
+            try:
+                biz = business_info(prev['1'], curr['1'], model=model)
+            except Exception as e:
+                print(f"{ticker} - Business Info Analysis exception: {e}")
+                biz = EXTRACTION_FAILED
+            
+            try:
+                tone = tone_shift_analysis(prev['7'], curr['7'], model=model)
+            except Exception as e:
+                print(f"{ticker} - Tone Shift Analysis exception: {e}")
+                tone = EXTRACTION_FAILED
+            
+            try:
+                strat = strategy_summary_analysis(curr['7'], model=model)
+            except Exception as e:
+                print(f"{ticker} - Strategy Summary Analysis exception: {e}")
+                strat = EXTRACTION_FAILED
+            
+            try:
+                hc = human_capital_analysis(curr['1'], model=model)
+            except Exception as e:
+                print(f"{ticker} - Human Capital Analysis exception: {e}")
+                hc = EXTRACTION_FAILED
+
 
             # --- consolidate via LLM into short report + recommendation ---- #
             report, reco = self._consolidate_result(
@@ -59,17 +106,18 @@ class SecAnalysis:
             # --- flatten to dataframe row ---------------------------------- #
             rows.append({
                 "ticker": ticker,
-                "risk_factors": rf.model_dump(),
-                "md&a": mda.model_dump(),
-                "legal": leg.model_dump(),
-                "controls": ctrl.model_dump(),
-                "business": biz.model_dump(),
-                "tone_shift": tone.model_dump(),
-                "strategy_summary": strat.model_dump(),
-                "human_cap_esg": hc.model_dump(),
+                "risk_factors": rf.model_dump() if hasattr(rf, "model_dump") else rf,
+                "md&a": mda.model_dump() if hasattr(mda, "model_dump") else mda,
+                "legal": leg.model_dump() if hasattr(leg, "model_dump") else leg,
+                "controls": ctrl.model_dump() if hasattr(ctrl, "model_dump") else ctrl,
+                "business": biz.model_dump() if hasattr(biz, "model_dump") else biz,
+                "tone_shift": tone.model_dump() if hasattr(tone, "model_dump") else tone,
+                "strategy_summary": strat.model_dump() if hasattr(strat, "model_dump") else strat,
+                "human_cap_esg": hc.model_dump() if hasattr(hc, "model_dump") else hc,
                 "final_report": report,
                 "recommendation": reco,
             })
+
 
         return pd.DataFrame(rows)
 

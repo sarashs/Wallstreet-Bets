@@ -90,7 +90,7 @@ def legal_matters(section_text: str, model: str = "gpt-4o"):
     """
     
     legal_out = client.responses.parse(
-        model="gpt-4o-mini",
+        model=model,
         input=[{"role":"system","content":"You are a rigorous SEC-filing analyst."},
                   {"role":"user","content":prompt_legal}],
         text_format=LegalMatters
