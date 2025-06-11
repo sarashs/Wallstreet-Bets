@@ -89,6 +89,11 @@ class SecAnalysis:
                 print(f"{ticker} - Human Capital Analysis exception: {e}")
                 hc = EXTRACTION_FAILED
 
+            try:
+                ecall = earnings_call(ticker)
+            except Exception as e:
+                print(f"{ticker} - earnings call exception: {e}")
+                ecall = EXTRACTION_FAILED
 
             # --- consolidate via LLM into short report + recommendation ---- #
             report, reco = self._consolidate_result(
@@ -101,6 +106,7 @@ class SecAnalysis:
                 tone=tone,
                 strategy=strat,
                 human_capital=hc,
+                ecall=ecall,
             )
 
             # --- flatten to dataframe row ---------------------------------- #
@@ -114,6 +120,7 @@ class SecAnalysis:
                 "tone_shift": tone.model_dump() if hasattr(tone, "model_dump") else tone,
                 "strategy_summary": strat.model_dump() if hasattr(strat, "model_dump") else strat,
                 "human_cap_esg": hc.model_dump() if hasattr(hc, "model_dump") else hc,
+                "ecall": ecall.model_dump() if hasattr(ecall, "model_dump") else ecall,
                 "final_report": report,
                 "recommendation": reco,
             })
@@ -153,7 +160,7 @@ class SecAnalysis:
             recommendation: str
 
         resp = client.responses.parse(
-            model="gpt-4o",
+            model="o3",
             input=[{"role": "system", "content": "You are a rigorous sell-side analyst."},
                    {"role": "user", "content": prompt}],
             text_format=ConsolidatedResponse,

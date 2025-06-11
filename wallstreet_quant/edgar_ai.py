@@ -261,6 +261,34 @@ def human_capital_analysis(section_text: str, model: str = "gpt-4o"):
     )
     return hc_out.output_parsed
 
+class EarningsCall(BaseModel):
+    managements_opinion : str
+    risks: List[str] = []
+    growth: List[str] = []
+    buy: bool
+
+def earnings_call(ticker: str):
+    query =  f"""
+        review the last ticker {ticker} earnings call?
+    """
+    instructions = """You are a stock analyst helping with finding and analyzinf earnings calls.
+     decide on the following give a few bullet points for each of the following:    
+    - managements_opinion: managements honest opinion of the company without the usual fluf and bullshit  
+    - risks: main risk factors  
+    - growth: main growth factors  
+    - buy: buy signal based on your gatherings either True or False (if data could not be found then false)
+    your output will help determine whether it is a good investment.
+    """
+    resp = client.responses.parse(
+        model="gpt-4.1",
+        tools=[{"type": "web_search_preview",
+                "search_context_size": "low"}],
+        input=query,
+        instructions=instructions,
+        text_format=EarningsCall
+    )
+    resp = resp.output_parsed
+    return resp
 
 #risk = risk_factor_analysis(prev['1A'], last['1A'], model="gpt-4o")
 #mdad = mdad_analysis(last['7'], model="gpt-4o")
