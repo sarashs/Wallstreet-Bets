@@ -267,7 +267,7 @@ class EarningsCall(BaseModel):
     growth: List[str] = []
     buy: bool
 
-def earnings_call(ticker: str):
+def earnings_call(ticker: str, model: str = "gpt-4.1"):
     query =  f"""
         review the last ticker {ticker} earnings call?
     """

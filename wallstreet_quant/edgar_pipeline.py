@@ -106,7 +106,7 @@ class SecAnalysis:
                 tone=tone,
                 strategy=strat,
                 human_capital=hc,
-                ecall=ecall,
+                earnings_call=ecall,
             )
 
             # --- flatten to dataframe row ---------------------------------- #
@@ -120,7 +120,7 @@ class SecAnalysis:
                 "tone_shift": tone.model_dump() if hasattr(tone, "model_dump") else tone,
                 "strategy_summary": strat.model_dump() if hasattr(strat, "model_dump") else strat,
                 "human_cap_esg": hc.model_dump() if hasattr(hc, "model_dump") else hc,
-                "ecall": ecall.model_dump() if hasattr(ecall, "model_dump") else ecall,
+                "earnings_call": ecall.model_dump() if hasattr(ecall, "model_dump") else ecall,
                 "final_report": report,
                 "recommendation": reco,
             })
@@ -140,7 +140,7 @@ class SecAnalysis:
 
         prompt = f"""
         You are a senior equity analyst.  Summarise the following parsed SEC-filing
-        analysis (JSON) into a concise report (≤ 200 words) and give an overall
+        analysis and earnings call (JSON) into a concise report (≤ 200 words) and give an overall
         BUY recommendation: positive / neutral / negative.  Focus on key drivers,
         risks, guidance and tone.
 
@@ -161,7 +161,7 @@ class SecAnalysis:
 
         resp = client.responses.parse(
             model="o3",
-            input=[{"role": "system", "content": "You are a rigorous sell-side analyst."},
+            input=[{"role": "system", "content": "You are a rigorous investment analyst."},
                    {"role": "user", "content": prompt}],
             text_format=ConsolidatedResponse,
         ).output_parsed
