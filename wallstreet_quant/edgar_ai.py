@@ -2,7 +2,12 @@ from typing import List, Optional
 from pydantic import BaseModel, Field
 from openai import OpenAI
 from enum import Enum
+try:
+    from edgar_extractor import chunk_text
+except:
+    from wallstreet_quant.edgar_extractor import chunk_text
 
+# Initialize OpenAI client
 client = OpenAI()
 
 class BuyRecommendation(str, Enum):
@@ -290,6 +295,56 @@ def earnings_call(ticker: str, model: str = "gpt-4.1"):
     resp = resp.output_parsed
     return resp
 
+# ---------- 9. Competitive Landscape (Item 1A, 10-K; Item 1, 10-Q) ----------
+class Competition(BaseModel):
+    competitors_detected: bool
+    competitors: List[str]
+
+def competitors_analysis(company_name: str, section_item: str, model: str = "gpt-4o") -> set[str]:
+
+    """ Analyze the given section text for mentions of competitors.
+    """
+    if not section_item:
+        raise ValueError("section_item cannot be empty or None")
+
+    test_competitors = set()
+    client = OpenAI()
+    chunks = chunk_text(section_item)
+
+    for section_text in chunks:
+        prompt = f"""
+        Read the following section and return any company name that is mentioned as a competitor.
+        Make sure that what you return is mentioned in the context of competition and not in any other context (such as a client).
+        Do not return generic terms like "competitors" or "market players". 
+        Do not return the name of the company itself as a competitor.
+        Do not return the name of the products or services as competitors.
+        If there are no competitors return an empty list.
+        the response should be in the following format:
+        - competitors_detected: true or false
+        - competitors: list of competitors tickers
+        Company Name: {company_name}
+        SECTION chunk:
+        {section_text}
+        """
+
+        mda_out = client.responses.parse(
+            model=model,
+            input=[
+                {"role": "system", "content": "You are a rigorous SEC-filing analyst. Your task is to extract the name of competitors (other companies that are in competition) with"
+                " a company whole SEC filings you are analyzing. You are being given a chunk of text from the SEC filing."
+                " You must return the name of the competing companies the same way they appear in the text (not just tickers or shortened names unless they are used in the text as such)."
+                "The goal is to identify competitors that the company itself considers as competitors in the context of the text provided."},
+                {"role": "user", "content": prompt}
+            ],
+            text_format=Competition
+        ).output_parsed
+
+        for competitor in mda_out.competitors:
+            if competitor.lower() in section_text.lower():
+                test_competitors.add(competitor)
+    return test_competitors
+
+# Example usage:
 #risk = risk_factor_analysis(prev['1A'], last['1A'], model="gpt-4o")
 #mdad = mdad_analysis(last['7'], model="gpt-4o")
 #legal = legal_matters(last['3'], "gpt-4o")

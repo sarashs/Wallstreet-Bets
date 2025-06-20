@@ -399,11 +399,6 @@ def find_sections_using_toc(full_text, toc_list):
         # 4) assign
         flexible_title = escaped_title
 
-
-        print(f"Original title: '{title}'")
-        print(f"Clean title: '{clean_title}'") 
-        print(f"Flexible title: '{flexible_title}'")
-
         # Multiple patterns to try
         patterns = [
             rf'ITEM\s+{re.escape(item_num)}\b[\s\S]*?{flexible_title}',
@@ -439,6 +434,21 @@ def find_sections_using_toc(full_text, toc_list):
             print(f"Warning: Could not find actual section for Item {item_num}")
 
     return all_item_positions
+
+def chunk_text(text, max_len=30_000, overlap=1_000):
+    if max_len <= overlap:
+        raise ValueError("max_len must exceed overlap")
+
+    chunks, start, step = [], 0, max_len - overlap
+    n = len(text)
+
+    while start < n:
+        end = min(start + max_len, n)
+        chunks.append(text[start:end])
+        if end == n:                # reached the tail
+            break
+        start += step               # always moves forward
+    return chunks
 
 #test
 if __name__=="__main__":
