@@ -18,7 +18,8 @@ Use your own judgment or consult with a qualified professional before making any
 - **Dividend_stock_finder**: Finding good dividend stocks with fundamentals assessed by an LLM  
 - **Pair_trading**: Basic code for ADF test and visualization for finding stocks for pair trading (over days)  
 - **REIT_analysis**: Analysing and finding independent high dividend REITs for investment  
-- **Magic_formula**: Modified Greenblatt Magic Formula for screening stocks plus further analysis of the 10-K filings for domestic US stocks. The latter uses the `wallstreet_quant` package.  
+- **Magic_formula**: Modified Greenblatt Magic Formula for screening stocks plus further analysis of the 10-K filings for domestic US stocks. The latter uses the `wallstreet_quant` package 
+- **Companies_competitive_relationship**: Extract and visualize self-reported competitive relationships between companies using SEC 10-K filings with AI-powered analysis and network graphs  
 
 ### Packages:
 - **wallstreet_quant**: A Python package of various tools for analyzing stocks

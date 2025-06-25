@@ -313,31 +313,40 @@ def competitors_analysis(company_name: str, section_item: str, model: str = "gpt
 
     for section_text in chunks:
         prompt = f"""
-        Read the following section and return any company name that is mentioned as a competitor.
-        Make sure that what you return is mentioned in the context of competition and not in any other context (such as a client).
-        Do not return generic terms like "competitors" or "market players". 
-        Do not return the name of the company itself as a competitor.
-        Do not return the name of the products or services as competitors.
-        If there are no competitors return an empty list.
-        the response should be in the following format:
-        - competitors_detected: true or false
-        - competitors: list of competitors tickers
+        Read the following section and return ONLY company names that are mentioned as competitors.
+        
+        STRICT RULES:
+        1. ONLY return actual company names (e.g., "Microsoft Corporation", "Apple Inc.", "Amazon")
+        2. DO NOT return product names (e.g., "Android", "Xbox", "iPhone", "Windows")
+        3. DO NOT return service names (e.g., "Google Search", "Azure", "AWS")
+        4. DO NOT return platform names (e.g., "iOS", "macOS", "Linux")
+        5. DO NOT return generic terms (e.g., "competitors", "rivals", "market players")
+        6. DO NOT return the company itself ({company_name}) as a competitor
+        7. Only include if mentioned in a competitive context, not as clients or partners
+        
+        Examples of VALID competitors: "Apple Inc.", "Microsoft Corporation", "Meta Platforms"
+        Examples of INVALID (products/services): "Android", "Xbox", "iPhone", "Google Search", "Office 365"
+        
         Company Name: {company_name}
         SECTION chunk:
         {section_text}
         """
 
-        mda_out = client.responses.parse(
+        mda_response = client.responses.parse(
             model=model,
             input=[
-                {"role": "system", "content": "You are a rigorous SEC-filing analyst. Your task is to extract the name of competitors (other companies that are in competition) with"
-                " a company whole SEC filings you are analyzing. You are being given a chunk of text from the SEC filing."
-                " You must return the name of the competing companies the same way they appear in the text (not just tickers or shortened names unless they are used in the text as such)."
-                "The goal is to identify competitors that the company itself considers as competitors in the context of the text provided."},
+                {"role": "system", "content": "You are a rigorous SEC-filing analyst specializing in competitor identification. "
+                "Your ONLY task is to extract actual COMPANY NAMES that are competitors, NOT products, services, or platforms. "
+                "Be extremely strict: only return full company names like 'Apple Inc.', 'Microsoft Corporation', 'Meta Platforms', etc. "
+                "NEVER return product names like 'Android', 'Xbox', 'iPhone', 'Windows', or service names like 'Google Search', 'AWS'. "
+                "The goal is to identify competing CORPORATIONS, not their products or services. "
+                "If you're unsure whether something is a company name or product name, exclude it. "
+                "Only include companies explicitly mentioned as competitors in the text."},
                 {"role": "user", "content": prompt}
             ],
             text_format=Competition
-        ).output_parsed
+        )
+        mda_out = mda_response.output_parsed
 
         for competitor in mda_out.competitors:
             if competitor.lower() in section_text.lower():
