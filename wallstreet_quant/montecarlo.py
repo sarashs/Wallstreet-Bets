@@ -149,19 +149,26 @@ class NaiveMonteCarlo(AbstractMonteCarlo):
     Naive Monte Carlo simulation implementation.
     Inherits from AbstractMonteCarlo and implements Monte Carlo simulation.
     """
-    
-    def __init__(self, tickers: List[str], alpha_correction: List[float] = None, period="1y"):
+
+    def __init__(self, tickers: List[str], alpha_correction: List[float] = None, weights: List[float] = None, period="1y"):
         """
         Initialize Monte Carlo simulator.
         
         Args:
             tickers: List of stock ticker symbols
             alpha_correction: Optional list of annualized yearly return. Alpha corrections for each ticker to correct for estimated future portfolio alpha (default: None)
+            weights: Optional list of weights for each ticker in the portfolio (default: None)
         """
         super().__init__(tickers)
         if alpha_correction is not None:
             assert len(tickers) == len(alpha_correction), "Length of tickers and alpha_correction must match."
         self.alpha_correction = alpha_correction
+        if weights is not None:
+            assert len(tickers) == len(weights), "Length of tickers and weights must match."
+            self.weights = np.array(weights) / np.sum(weights)
+        else:
+            # Default to equal weights if not provided
+            self.weights = np.ones(len(tickers)) / len(tickers)
         self.simulation_results = None
         self.fetch_data(period)
         # Ensure we have means and covariances
@@ -185,11 +192,7 @@ class NaiveMonteCarlo(AbstractMonteCarlo):
 
         # Generate random samples
         np.random.seed(42)  # For reproducibility
-        
-        # For portfolio simulation, we'll use equal weights
-        n_assets = len(self.tickers)
-        weights = np.ones(n_assets) / n_assets
-        
+        weights = self.weights
         # Calculate portfolio mean and variance
         portfolio_mean = np.dot(weights, self.means)
         portfolio_variance = np.dot(weights, np.dot(self.covariances, weights))
@@ -276,10 +279,12 @@ class NaiveMonteCarlo(AbstractMonteCarlo):
         axes[1, 1].axis('off')
         
         # Calculate key statistics
+        # Bundle tickers in sets of 5 per line for display
+        tickers = '\n'.join([', '.join(self.tickers[i:i+5]) for i in range(0, len(self.tickers), 5)])
         stats_text = f"""
         Simulation Summary:
         
-        Portfolio: {', '.join(self.tickers)}
+        Portfolio: {tickers}
         Simulation Days: {days}
         Number of Simulations: {self.simulation_results['n_simulations']:,}
         
