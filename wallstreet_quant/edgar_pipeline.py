@@ -6,9 +6,11 @@ from tqdm import tqdm
 try:
     from edgar_ai import *
     from edgar_extractor import extract_items_from_filing
+    from edgar_extractor import fetch_10K_and_10Q_filings
 except:
     from wallstreet_quant.edgar_ai import *
     from wallstreet_quant.edgar_extractor import extract_items_from_filing
+    from wallstreet_quant.edgar_extractor import fetch_10K_and_10Q_filings
 import json
 from openai import OpenAI
 
@@ -33,58 +35,100 @@ class SecAnalysis:
         rows = []
         for ticker, flist in tqdm(filings.items()):
             if len(flist) < 2:  # need prev + current
-                raise ValueError(f"{ticker}: need at least two filings (previous & current)")
+                print(f"{ticker}: need has less than two filings (previous & current)")
 
             # Pull the key items once
             items_needed = ['1', '1A', '3', '7', '9A']     # add others if your extractor supports them
-            prev = extract_items_from_filing(flist[1], items_needed)   # older filing
-            curr = extract_items_from_filing(flist[0], items_needed)   # latest filing
-            
-            # --- section extractions -------------------------------------- #
             try:
-                rf = risk_factor_analysis(prev['1A'], curr['1A'], model=model)
+                curr = extract_items_from_filing(flist[0], items_needed)   # latest filing
+            except Exception as e:
+                print(f"{ticker} - Recent filing extraction failed: {e}")
+                # Use empty dicts to trigger fallback to whole filing
+                curr = {}
+            try:
+                prev = extract_items_from_filing(flist[1], items_needed)   # older filing
+            except Exception as e:
+                print(f"{ticker} - Previous filing extraction failed: {e}")
+                # Use empty dicts to trigger fallback to whole filing
+                prev = {}
+            
+            # --- section extractions with fallback to whole filing ------ #
+            try:
+                if '1A' in prev and '1A' in curr and prev['1A'] and curr['1A']:
+                    rf = risk_factor_analysis(prev['1A'], curr['1A'], model=model)
+                else:
+                    print(f"{ticker} - Risk Factor sections missing, using whole filing...")
+                    rf = risk_factor_analysis(flist[1].text(), flist[0].text(), model=model)
             except Exception as e:
                 print(f"{ticker} - Risk Factor Analysis exception: {e}")
                 rf = EXTRACTION_FAILED
             
             try:
-                mda = mdad_analysis(curr['7'], model=model)
+                if '7' in curr and curr['7']:
+                    mda = mdad_analysis(curr['7'], model=model)
+                else:
+                    print(f"{ticker} - MD&A section missing, using whole filing...")
+                    mda = mdad_analysis(flist[0].text(), model=model)
             except Exception as e:
                 print(f"{ticker} - MD&A Analysis exception: {e}")
                 mda = EXTRACTION_FAILED
             
             try:
-                leg = legal_matters(curr['3'], model=model)
+                if '3' in curr and curr['3']:
+                    leg = legal_matters(curr['3'], model=model)
+                else:
+                    print(f"{ticker} - Legal section missing, using whole filing...")
+                    leg = legal_matters(flist[0].text(), model=model)
             except Exception as e:
                 print(f"{ticker} - Legal Matters Analysis exception: {e}")
                 leg = EXTRACTION_FAILED
 
             try:
-                ctrl = control_status(curr['9A'], model=model)
+                if '9A' in curr and curr['9A']:
+                    ctrl = control_status(curr['9A'], model=model)
+                else:
+                    print(f"{ticker} - Controls section missing, using whole filing...")
+                    ctrl = control_status(flist[0].text(), model=model)
             except Exception as e:
                 print(f"{ticker} - Control Status Analysis exception: {e}")
                 ctrl = EXTRACTION_FAILED
             
             try:
-                biz = business_info(prev['1'], curr['1'], model=model)
+                if '1' in prev and '1' in curr and prev['1'] and curr['1']:
+                    biz = business_info(prev['1'], curr['1'], model=model)
+                else:
+                    print(f"{ticker} - Business sections missing, using whole filing...")
+                    biz = business_info(flist[1].text(), flist[0].text(), model=model)
             except Exception as e:
                 print(f"{ticker} - Business Info Analysis exception: {e}")
                 biz = EXTRACTION_FAILED
             
             try:
-                tone = tone_shift_analysis(prev['7'], curr['7'], model=model)
+                if '7' in prev and '7' in curr and prev['7'] and curr['7']:
+                    tone = tone_shift_analysis(prev['7'], curr['7'], model=model)
+                else:
+                    print(f"{ticker} - MD&A sections missing for tone analysis, using whole filing...")
+                    tone = tone_shift_analysis(flist[1].text(), flist[0].text(), model=model)
             except Exception as e:
                 print(f"{ticker} - Tone Shift Analysis exception: {e}")
                 tone = EXTRACTION_FAILED
             
             try:
-                strat = strategy_summary_analysis(curr['7'], model=model)
+                if '7' in curr and curr['7']:
+                    strat = strategy_summary_analysis(curr['7'], model=model)
+                else:
+                    print(f"{ticker} - MD&A section missing for strategy, using whole filing...")
+                    strat = strategy_summary_analysis(flist[0].text(), model=model)
             except Exception as e:
                 print(f"{ticker} - Strategy Summary Analysis exception: {e}")
                 strat = EXTRACTION_FAILED
             
             try:
-                hc = human_capital_analysis(curr['1'], model=model)
+                if '1' in curr and curr['1']:
+                    hc = human_capital_analysis(curr['1'], model=model)
+                else:
+                    print(f"{ticker} - Business section missing for human capital, using whole filing...")
+                    hc = human_capital_analysis(flist[0].text(), model=model)
             except Exception as e:
                 print(f"{ticker} - Human Capital Analysis exception: {e}")
                 hc = EXTRACTION_FAILED
@@ -140,9 +184,9 @@ class SecAnalysis:
 
         prompt = f"""
         You are a senior equity analyst.  Summarise the following parsed SEC-filing
-        analysis and earnings call (JSON) into a concise report (≤ 200 words) and give an overall
+        analysis and earnings call (JSON) into a concise justification (≤ 300 words) and give an overall
         BUY recommendation: positive / neutral / negative.  Focus on key drivers,
-        risks, guidance and tone.
+        risks, guidance and tone. Be objective, rigorous and critical. You should explain your decision in the justification section, weighing pros and cons.
 
         JSON INPUT:
         {analysis_json}
