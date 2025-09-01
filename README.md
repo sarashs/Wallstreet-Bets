@@ -51,9 +51,14 @@ Use your own judgment or consult with a qualified professional before making any
 
 ### Packages:
 - **wallstreet_quant**: A comprehensive Python package for quantitative finance analysis including:
-  - **SEC Data Extraction**: Automated fetching and parsing of 10-K and 10-Q filings from EDGAR database
-  - **AI-Powered Analysis**: GPT-4 integration for extracting competitive intelligence and business insights from SEC filings
-  - **Company Deduplication**: Advanced name matching and canonicalization for handling different company naming conventions
-  - **Monte Carlo Engine**: Abstract base classes for implementing various Monte Carlo simulation strategies
+  - **edgar_extractor**: Automated fetching and parsing of 10-K and 10-Q filings from EDGAR database
+  - **edgar_ai**: GPT-4 integration for extracting competitive intelligence and business insights from SEC filings
+  - **utils**: Utilities such as advanced name matching and canonicalization for handling different company naming conventions (deduplication)
+  - **montecarlo**: Abstract base classes for implementing various Monte Carlo simulation strategies
   - **Risk Analytics**: Built-in functions for calculating financial risk metrics and portfolio optimization
-  - **Data Pipeline**: End-to-end workflows for collecting, processing, and analyzing financial data
+  - **edgar_pipeline**: End-to-end workflows for collecting, processing, and analyzing financial data
+
+  ### To be implemented:
+  - revenue growth filter
+  - Insider share purchase or sale
+  - Share byback by the company
