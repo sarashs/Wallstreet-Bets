@@ -24,7 +24,7 @@ class RiskFactorsChanges(BaseModel):
     added_risks: List[RiskChange] = []
     removed_risks: List[RiskChange] = []
 
-def risk_factor_analysis(previous_1A_text: str, current_1A_text: str, model: str ="gpt-4o"):
+def risk_factor_analysis(previous_1A_text: str, current_1A_text: str, model: str ="gpt-4.1"):
     prompt_risk = f"""
     You are analyzing the 'Risk Factors' section (Item 1A) for the current and previous 10-K document and making a buy recommendation.  
     Task: compare it with the prior filing and return a response conforming to RiskFactorsChanges:
@@ -39,7 +39,7 @@ def risk_factor_analysis(previous_1A_text: str, current_1A_text: str, model: str
     """
     risk_out = client.responses.parse(
         model=model,
-        input=[{"role":"system","content":"You are a rigorous SEC-filing analyst."},
+        input=[{"role":"system","content":"You are a rigorous SEC-filing analyst. You job is detect changes in risk factors. You should be aware that sometimes risk factors are hidden or implicit (sometimes on purpose)."},
                   {"role":"user","content":prompt_risk}],
         text_format=RiskFactorsChanges
     )
@@ -52,13 +52,13 @@ class MDADetails(BaseModel):
     forward_looking_statements: List[str]
     honest_opinion: str
     
-def mdad_analysis(section_text: str, model: str = "gpt-4o"):
+def mdad_analysis(section_text: str, model: str = "gpt-4.1"):
     prompt_mda = f"""
     From the MD&A (Item 7 / Item 2) extract:
     - performance_drivers: key factors mgmt says drove recent results (list).  
     - forward_looking_statements: explicit outlook or plans.
     - honest_opinion: management's honest opinion about the business
-    Return as MDADetails.
+    Return as MDADetails. This opinion might be implicit or hidden in the text.
     
     SECTION:
     {section_text}
@@ -83,7 +83,7 @@ class LegalMatters(BaseModel):
     material_legal_proceedings: bool
     proceedings: List[Proceeding] = []
 
-def legal_matters(section_text: str, model: str = "gpt-4o"):
+def legal_matters(section_text: str, model: str = "gpt-4.1"):
     prompt_legal = f"""
     Summarize all ongoing or pending matters in 'Legal Proceedings' (Item 3).
     - material_legal_proceedings: True/False based on whether they exist
@@ -112,9 +112,10 @@ class ControlsStatus(BaseModel):
     material_weaknesses_disclosed: bool
     weaknesses: List[Weakness] = []
 
-def control_status(section_text: str, model: str = "gpt-4o"):
+def control_status(section_text: str, model: str = "gpt-4.1"):
     prompt_ctrl = f"""
-    In 'Controls and Procedures' (Item 9A / Item 4) identify any material weaknesses.  
+    In 'Controls and Procedures' (Item 9A / Item 4) identify any material weaknesses.
+    It might be the case that they try to bury this information in dense text and hide it.
     Return as ControlsStatus.
     
     SECTION:
@@ -140,9 +141,9 @@ class BusinessInfo(BaseModel):
     segments: List[Segment]
     segment_changes: List[str]
 
-def business_info(previous_1_text: str, current_1_text: str, model: str = "gpt-4o"):
+def business_info(previous_1_text: str, current_1_text: str, model: str = "gpt-4.1"):
     prompt_business = f"""
-    From 'Business' (Item 1) list current reportable segments and note any changes.  
+    From 'Business' (Item 1) list current reportable segments and note any changes.
     Return as BusinessInfo.
     
     Previous Item 1:
@@ -170,7 +171,7 @@ class ToneShift(BaseModel):
     language_shift_detected: bool
     examples: List[ShiftExample] = []
 
-def tone_shift_analysis(previous_mda: str, current_mda: str, model: str = "gpt-4o"):
+def tone_shift_analysis(previous_mda: str, current_mda: str, model: str = "gpt-4.1"):
 
     prompt_shift = f"""
     You are analyzing the language tone of the MD&A section. Your task is to identify tone or hedging shifts — such as moving from confident to cautious language, from definitive to speculative, or from optimistic to neutral.
@@ -220,7 +221,7 @@ class StrategySummary(BaseModel):
     corporate_priorities: List[str]
     guidance_revisions: List[GuidanceChange]
 
-def strategy_summary_analysis(section_text: str, model: str = "gpt-4o"):
+def strategy_summary_analysis(section_text: str, model: str = "gpt-4.1"):
     prompt_strategy = f"""
     From the MD&A section (Item 7, 10-K or Item 2, 10-Q), extract:
     - Each business segment's recent performance and any strategic changes
@@ -249,7 +250,7 @@ class HCReport(BaseModel):
     human_capital_changes: bool
     details: List[HCDetail] = []
 
-def human_capital_analysis(section_text: str, model: str = "gpt-4o"):
+def human_capital_analysis(section_text: str, model: str = "gpt-4.1"):
     prompt_hc = f"""
     From the 'Human Capital Resources' / ESG discussion (Item 1), note any significant
     updates (headcount, retention, labor disputes, ESG initiatives).  
@@ -282,7 +283,7 @@ def earnings_call(ticker: str, model: str = "gpt-4.1"):
     - risks: main risk factors  
     - growth: main growth factors  
     - buy: buy signal based on your gatherings either True or False (if data could not be found then false)
-    your output will help determine whether it is a good investment.
+    your output will help determine whether it is a good investment. Be very conservative in your buy signal.
     """
     resp = client.responses.parse(
         model="gpt-4.1",

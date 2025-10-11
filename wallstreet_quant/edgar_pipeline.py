@@ -31,7 +31,7 @@ class SecAnalysis:
     Each filing_obj must expose the minimal attributes accessed below.
     """
 
-    def __call__(self, filings: Dict[str, List[object]], model="gpt-4o") -> pd.DataFrame:
+    def __call__(self, filings: Dict[str, List[object]], model="gpt-4.1") -> pd.DataFrame:
         rows = []
         for ticker, flist in tqdm(filings.items()):
             if len(flist) < 2:  # need prev + current
@@ -183,7 +183,7 @@ class SecAnalysis:
                                     if k not in {"ticker"}})
 
         prompt = f"""
-        You are a senior equity analyst.  Summarise the following parsed SEC-filing
+        Summarise the following parsed SEC-filing
         analysis and earnings call (JSON) into a concise justification (≤ 300 words) and give an overall
         BUY recommendation: positive / neutral / negative.  Focus on key drivers,
         risks, guidance and tone. Be objective, rigorous and critical. You should explain your decision in the justification section, weighing pros and cons.
@@ -205,7 +205,7 @@ class SecAnalysis:
 
         resp = client.responses.parse(
             model="o3",
-            input=[{"role": "system", "content": "You are a rigorous investment analyst."},
+            input=[{"role": "system", "content": "You are a rigorous investment analyst. Your job is to analyze the data you are provided and produce a buy signal. Be very conservatice on buy signals. "},
                    {"role": "user", "content": prompt}],
             text_format=ConsolidatedResponse,
         ).output_parsed
