@@ -38,6 +38,26 @@ Use your own judgment or consult with a qualified professional before making any
 - **Scalable Processing**: Efficient handling of large datasets and complex calculations
 - **Interactive Visualizations**: Comprehensive plotting and dashboard capabilities
 - **API Integration**: Direct connections to financial data sources and AI services
+- **Test Suite**: Comprehensive unit tests with pytest for core functionality
+
+---
+
+## Testing
+
+The repository includes a comprehensive test suite for the `wallstreet_quant` package. To run tests:
+
+```bash
+# Install test dependencies
+pip install -r requirements-dev.txt
+
+# Run all tests
+pytest tests/
+
+# Run with coverage report
+pytest tests/ --cov=wallstreet_quant --cov-report=term-missing
+```
+
+See [tests/README.md](tests/README.md) for more details.
 
 ---
 
