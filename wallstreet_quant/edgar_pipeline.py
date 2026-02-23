@@ -3,6 +3,42 @@ from pydantic import BaseModel
 from enum import Enum
 import pandas as pd
 from tqdm import tqdm
+import logging
+from datetime import datetime
+import os
+
+# --- Setup logging with today's date as filename --- #
+def setup_pipeline_logger():
+    """Configure logging to file with today's date."""
+    log_filename = datetime.now().strftime("%Y-%m-%d") + ".log"
+    
+    # Create logger
+    logger = logging.getLogger("SecAnalysis")
+    logger.setLevel(logging.DEBUG)
+    
+    # Remove any existing handlers to avoid duplicates
+    logger.handlers = []
+    
+    # File handler - detailed logging
+    file_handler = logging.FileHandler(log_filename, mode='a')
+    file_handler.setLevel(logging.DEBUG)
+    file_format = logging.Formatter('%(asctime)s | %(levelname)-8s | %(message)s', datefmt='%Y-%m-%d %H:%M:%S')
+    file_handler.setFormatter(file_format)
+    
+    # Console handler - info level only
+    console_handler = logging.StreamHandler()
+    console_handler.setLevel(logging.INFO)
+    console_format = logging.Formatter('%(levelname)s: %(message)s')
+    console_handler.setFormatter(console_format)
+    
+    logger.addHandler(file_handler)
+    logger.addHandler(console_handler)
+    
+    return logger
+
+# Initialize logger
+logger = setup_pipeline_logger()
+
 try:
     from edgar_ai import *
     from edgar_extractor import extract_items_from_filing
@@ -31,127 +67,188 @@ class SecAnalysis:
     Each filing_obj must expose the minimal attributes accessed below.
     """
 
-    def __call__(self, filings: Dict[str, List[object]], model="gpt-4.1") -> pd.DataFrame:
+    def __call__(self, filings: Dict[str, List[object]], model="gpt-5.2-pro") -> pd.DataFrame:
         rows = []
+        total_tickers = len(filings)
+        skipped_no_filings = 0
+        single_filing_mode = 0
+        successful = 0
+        failed = 0
+        
+        logger.info("=" * 60)
+        logger.info(f"SEC ANALYSIS STARTED - Processing {total_tickers} tickers")
+        logger.info(f"Model: {model}")
+        logger.info("=" * 60)
+        
         for ticker, flist in tqdm(filings.items()):
-            if len(flist) < 2:  # need prev + current
-                print(f"{ticker}: need has less than two filings (previous & current)")
+            logger.info(f"\n{'─' * 40}")
+            logger.info(f"PROCESSING: {ticker}")
+            
+            # Skip tickers with no filings at all
+            if not flist or len(flist) == 0:
+                logger.warning(f"{ticker}: No filings found - SKIPPED (may not be a SEC filer)")
+                skipped_no_filings += 1
+                continue
+            
+            # For comparison analysis, we need at least 2 filings
+            # If only 1 filing exists, use it for both current and previous (limited comparison)
+            if len(flist) < 2:
+                logger.warning(f"{ticker}: Only 1 filing found - using single filing mode (limited comparison)")
+                single_filing_mode += 1
+                flist = [flist[0], flist[0]]  # Use same filing for both
+            
+            # Log filing details
+            try:
+                logger.debug(f"{ticker}: Current filing: {flist[0].form} dated {flist[0].filing_date}")
+                logger.debug(f"{ticker}: Previous filing: {flist[1].form} dated {flist[1].filing_date}")
+            except Exception as e:
+                logger.debug(f"{ticker}: Could not log filing details: {e}")
 
             # Pull the key items once
             items_needed = ['1', '1A', '3', '7', '9A']     # add others if your extractor supports them
             try:
                 curr = extract_items_from_filing(flist[0], items_needed)   # latest filing
+                logger.debug(f"{ticker}: Current filing - extracted items: {list(curr.keys())}")
             except Exception as e:
-                print(f"{ticker} - Recent filing extraction failed: {e}")
+                logger.error(f"{ticker}: Recent filing extraction FAILED: {e}")
                 # Use empty dicts to trigger fallback to whole filing
                 curr = {}
             try:
                 prev = extract_items_from_filing(flist[1], items_needed)   # older filing
+                logger.debug(f"{ticker}: Previous filing - extracted items: {list(prev.keys())}")
             except Exception as e:
-                print(f"{ticker} - Previous filing extraction failed: {e}")
+                logger.error(f"{ticker}: Previous filing extraction FAILED: {e}")
                 # Use empty dicts to trigger fallback to whole filing
                 prev = {}
             
             # --- section extractions with fallback to whole filing ------ #
+            logger.debug(f"{ticker}: Starting LLM analysis...")
+            
             try:
                 if '1A' in prev and '1A' in curr and prev['1A'] and curr['1A']:
+                    logger.debug(f"{ticker}: Risk Factor analysis - using extracted sections")
                     rf = risk_factor_analysis(prev['1A'], curr['1A'], model=model)
                 else:
-                    print(f"{ticker} - Risk Factor sections missing, using whole filing...")
+                    logger.warning(f"{ticker}: Risk Factor sections missing - using whole filing fallback")
                     rf = risk_factor_analysis(flist[1].text(), flist[0].text(), model=model)
+                logger.info(f"{ticker}: ✓ Risk Factor analysis completed")
             except Exception as e:
-                print(f"{ticker} - Risk Factor Analysis exception: {e}")
+                logger.error(f"{ticker}: ✗ Risk Factor Analysis FAILED: {e}")
                 rf = EXTRACTION_FAILED
             
             try:
                 if '7' in curr and curr['7']:
+                    logger.debug(f"{ticker}: MD&A analysis - using extracted section")
                     mda = mdad_analysis(curr['7'], model=model)
                 else:
-                    print(f"{ticker} - MD&A section missing, using whole filing...")
+                    logger.warning(f"{ticker}: MD&A section missing - using whole filing fallback")
                     mda = mdad_analysis(flist[0].text(), model=model)
+                logger.info(f"{ticker}: ✓ MD&A analysis completed")
             except Exception as e:
-                print(f"{ticker} - MD&A Analysis exception: {e}")
+                logger.error(f"{ticker}: ✗ MD&A Analysis FAILED: {e}")
                 mda = EXTRACTION_FAILED
             
             try:
                 if '3' in curr and curr['3']:
+                    logger.debug(f"{ticker}: Legal analysis - using extracted section")
                     leg = legal_matters(curr['3'], model=model)
                 else:
-                    print(f"{ticker} - Legal section missing, using whole filing...")
+                    logger.warning(f"{ticker}: Legal section missing - using whole filing fallback")
                     leg = legal_matters(flist[0].text(), model=model)
+                logger.info(f"{ticker}: ✓ Legal analysis completed")
             except Exception as e:
-                print(f"{ticker} - Legal Matters Analysis exception: {e}")
+                logger.error(f"{ticker}: ✗ Legal Matters Analysis FAILED: {e}")
                 leg = EXTRACTION_FAILED
 
             try:
                 if '9A' in curr and curr['9A']:
+                    logger.debug(f"{ticker}: Controls analysis - using extracted section")
                     ctrl = control_status(curr['9A'], model=model)
                 else:
-                    print(f"{ticker} - Controls section missing, using whole filing...")
+                    logger.warning(f"{ticker}: Controls section missing - using whole filing fallback")
                     ctrl = control_status(flist[0].text(), model=model)
+                logger.info(f"{ticker}: ✓ Controls analysis completed")
             except Exception as e:
-                print(f"{ticker} - Control Status Analysis exception: {e}")
+                logger.error(f"{ticker}: ✗ Control Status Analysis FAILED: {e}")
                 ctrl = EXTRACTION_FAILED
             
             try:
                 if '1' in prev and '1' in curr and prev['1'] and curr['1']:
+                    logger.debug(f"{ticker}: Business analysis - using extracted sections")
                     biz = business_info(prev['1'], curr['1'], model=model)
                 else:
-                    print(f"{ticker} - Business sections missing, using whole filing...")
+                    logger.warning(f"{ticker}: Business sections missing - using whole filing fallback")
                     biz = business_info(flist[1].text(), flist[0].text(), model=model)
+                logger.info(f"{ticker}: ✓ Business analysis completed")
             except Exception as e:
-                print(f"{ticker} - Business Info Analysis exception: {e}")
+                logger.error(f"{ticker}: ✗ Business Info Analysis FAILED: {e}")
                 biz = EXTRACTION_FAILED
             
             try:
                 if '7' in prev and '7' in curr and prev['7'] and curr['7']:
                     tone = tone_shift_analysis(prev['7'], curr['7'], model=model)
                 else:
-                    print(f"{ticker} - MD&A sections missing for tone analysis, using whole filing...")
+                    logger.warning(f"{ticker}: MD&A sections missing for tone analysis - using whole filing fallback")
                     tone = tone_shift_analysis(flist[1].text(), flist[0].text(), model=model)
+                logger.info(f"{ticker}: ✓ Tone analysis completed")
             except Exception as e:
-                print(f"{ticker} - Tone Shift Analysis exception: {e}")
+                logger.error(f"{ticker}: ✗ Tone Shift Analysis FAILED: {e}")
                 tone = EXTRACTION_FAILED
             
             try:
                 if '7' in curr and curr['7']:
+                    logger.debug(f"{ticker}: Strategy analysis - using extracted section")
                     strat = strategy_summary_analysis(curr['7'], model=model)
                 else:
-                    print(f"{ticker} - MD&A section missing for strategy, using whole filing...")
+                    logger.warning(f"{ticker}: MD&A section missing for strategy - using whole filing fallback")
                     strat = strategy_summary_analysis(flist[0].text(), model=model)
+                logger.info(f"{ticker}: ✓ Strategy analysis completed")
             except Exception as e:
-                print(f"{ticker} - Strategy Summary Analysis exception: {e}")
+                logger.error(f"{ticker}: ✗ Strategy Summary Analysis FAILED: {e}")
                 strat = EXTRACTION_FAILED
             
             try:
                 if '1' in curr and curr['1']:
+                    logger.debug(f"{ticker}: Human capital analysis - using extracted section")
                     hc = human_capital_analysis(curr['1'], model=model)
                 else:
-                    print(f"{ticker} - Business section missing for human capital, using whole filing...")
+                    logger.warning(f"{ticker}: Business section missing for human capital - using whole filing fallback")
                     hc = human_capital_analysis(flist[0].text(), model=model)
+                logger.info(f"{ticker}: ✓ Human capital analysis completed")
             except Exception as e:
-                print(f"{ticker} - Human Capital Analysis exception: {e}")
+                logger.error(f"{ticker}: ✗ Human Capital Analysis FAILED: {e}")
                 hc = EXTRACTION_FAILED
 
             try:
+                logger.debug(f"{ticker}: Fetching earnings call...")
                 ecall = earnings_call(ticker)
+                logger.info(f"{ticker}: ✓ Earnings call completed")
             except Exception as e:
-                print(f"{ticker} - earnings call exception: {e}")
+                logger.error(f"{ticker}: ✗ Earnings call FAILED: {e}")
                 ecall = EXTRACTION_FAILED
 
             # --- consolidate via LLM into short report + recommendation ---- #
-            report, reco = self._consolidate_result(
-                ticker=ticker,
-                risk=rf,
-                mda=mda,
-                legal=leg,
-                controls=ctrl,
-                business=biz,
-                tone=tone,
-                strategy=strat,
-                human_capital=hc,
-                earnings_call=ecall,
-            )
+            logger.debug(f"{ticker}: Consolidating results...")
+            try:
+                report, reco = self._consolidate_result(
+                    ticker=ticker,
+                    risk=rf,
+                    mda=mda,
+                    legal=leg,
+                    controls=ctrl,
+                    business=biz,
+                    tone=tone,
+                    strategy=strat,
+                    human_capital=hc,
+                    earnings_call=ecall,
+                )
+                logger.info(f"{ticker}: ✓ COMPLETED - Recommendation: {reco}")
+                successful += 1
+            except Exception as e:
+                logger.error(f"{ticker}: ✗ Consolidation FAILED: {e}")
+                report = "Analysis failed"
+                reco = "unknown"
+                failed += 1
 
             # --- flatten to dataframe row ---------------------------------- #
             rows.append({
@@ -169,6 +266,17 @@ class SecAnalysis:
                 "recommendation": reco,
             })
 
+        # --- Final summary --- #
+        logger.info("\n" + "=" * 60)
+        logger.info("SEC ANALYSIS COMPLETED")
+        logger.info("=" * 60)
+        logger.info(f"Total tickers processed: {total_tickers}")
+        logger.info(f"  ✓ Successful: {successful}")
+        logger.info(f"  ✗ Failed: {failed}")
+        logger.info(f"  ⊘ Skipped (no filings): {skipped_no_filings}")
+        logger.info(f"  ⚠ Single filing mode: {single_filing_mode}")
+        logger.info(f"Results DataFrame shape: {len(rows)} rows")
+        logger.info("=" * 60)
 
         return pd.DataFrame(rows)
 
@@ -178,9 +286,14 @@ class SecAnalysis:
     @staticmethod
     def _consolidate_result(**kwargs) -> tuple[str, str]:  # Fixed return type
         ticker = kwargs["ticker"]
+        logger.debug(f"{ticker}: Building consolidation prompt...")
+        
         analysis_json = json.dumps({k: v.model_dump() if isinstance(v, BaseModel) else v
                                     for k, v in kwargs.items()
                                     if k not in {"ticker"}})
+        
+        # Log sizes for debugging
+        logger.debug(f"{ticker}: Analysis JSON size: {len(analysis_json)} chars")
 
         prompt = f"""
         Summarise the following parsed SEC-filing
@@ -203,12 +316,15 @@ class SecAnalysis:
             report: str
             recommendation: str
 
+        logger.debug(f"{ticker}: Calling o3 model for consolidation...")
         resp = client.responses.parse(
             model="o3",
             input=[{"role": "system", "content": "You are a rigorous investment analyst. Your job is to analyze the data you are provided and produce a buy signal. Be very conservatice on buy signals. "},
                    {"role": "user", "content": prompt}],
             text_format=ConsolidatedResponse,
         ).output_parsed
+        
+        logger.debug(f"{ticker}: Consolidation response received")
 
         return resp.report, resp.recommendation
 
