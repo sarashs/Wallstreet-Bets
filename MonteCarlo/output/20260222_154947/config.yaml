@@ -1,0 +1,31 @@
+version: 0.1.0
+created_at: '20260222_154947'
+tickers:
+- QQQ
+- SCHD
+- SCHY
+weights:
+- 0.32
+- 0.34
+- 0.34
+history_days: 504
+selected_model: A
+waic_a: -7614.896489323032
+waic_b: -7612.503231471393
+delta_waic: 2.393257851639646
+se_delta: 15.288480822095158
+uncertain: true
+rationale: "Models are comparable (\u0394WAIC = 2.39, SE=15.29); uncertainty is large\
+  \ (|\u0394| < 2\xB7SE).  Defaulting to simpler Model A."
+rhat_max_a: 1.0074395501974194
+rhat_max_b: 1.028198844929204
+ess_min_a: 283.18795840045857
+ess_min_b: 135.0003318192708
+n_posterior_samples: 10000
+mcmc_settings:
+  warmup: 2000
+  n_samples: 5000
+  n_chains: 4
+  thinning: 2
+posterior_file: posterior.npz
+output_dir: MonteCarlo/output/20260222_154947
