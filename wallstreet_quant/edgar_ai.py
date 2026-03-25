@@ -2,6 +2,7 @@ from typing import List, Optional
 from pydantic import BaseModel, Field
 from openai import OpenAI
 from enum import Enum
+import warnings
 try:
     from edgar_extractor import chunk_text
 except:
@@ -285,14 +286,16 @@ def earnings_call(ticker: str, model: str = "gpt-5.2-pro"):
     - buy: buy signal based on your gatherings either True or False (if data could not be found then false)
     your output will help determine whether it is a good investment. Be very conservative in your buy signal.
     """
-    resp = client.responses.parse(
-        model="gpt-5.2-pro",
-        tools=[{"type": "web_search_preview",
-                "search_context_size": "low"}],
-        input=query,
-        instructions=instructions,
-        text_format=EarningsCall
-    )
+    with warnings.catch_warnings():
+        warnings.filterwarnings("ignore", message="Pydantic serializer warnings")
+        resp = client.responses.parse(
+            model="gpt-5.2-pro",
+            tools=[{"type": "web_search_preview",
+                    "search_context_size": "low"}],
+            input=query,
+            instructions=instructions,
+            text_format=EarningsCall
+        )
     resp = resp.output_parsed
     return resp
 
