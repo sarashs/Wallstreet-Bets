@@ -5,11 +5,18 @@
 # extract_items_from_filing: extracts the written part of filings for one file e.g., ["1A", "7", "3"]
 # pip install edgartools
 import sys
+from typing import List
 from edgar import *
 from edgar.financials import Financials
 import pandas as pd
 import os
 import re
+import logging
+
+from openai import OpenAI
+from pydantic import BaseModel
+
+logger = logging.getLogger("SecAnalysis")
 
 edgar_identity = None
 edgar_identity = os.getenv("edgar_identity") # must be a string like "user_name email@server.com" if you don't have an environment variable then set it mannually as I said: "user_name email@server.com"
@@ -892,6 +899,161 @@ def _extract_10q_items(full_text, items_to_extract, toc_end, verbose=False):
                     print(f"Warning: Could not extract Item {item_num} from 10-Q - no mapping found")
     
     return extracted
+
+
+def trim_filing_text(filing_obj) -> str:
+    """Return filing text with cover page, TOC, Item 8 (financials),
+    signatures, and exhibits stripped out.  Deterministic regex-based
+    trimming — no LLM cost."""
+    try:
+        raw = filing_obj.text()
+        text = _normalize_text(raw)
+
+        # --- detect filing type ---
+        filing_type = _detect_filing_type(filing_obj, text)
+        is_10q = (filing_type == '10-Q')
+
+        # 1. Remove everything before TOC end (cover page + TOC)
+        toc_end = _estimate_toc_end(text)
+        text = text[toc_end:]
+
+        # 2. Remove financial-statements section (Item 8 for 10-K,
+        #    Part I Item 1 for 10-Q) — the largest section, unused by
+        #    any of the 8 analysis functions.
+        if is_10q:
+            # Part I Item 1 = Financial Statements in 10-Q
+            fs_start = re.search(
+                r'(?:^|\n)[^\n]*?ITEM\s+1[\.\:\s\-–—]+FINANCIAL\s+STATEMENTS',
+                text, re.IGNORECASE | re.MULTILINE)
+            fs_end = re.search(
+                r'(?:^|\n)[^\n]*?ITEM\s+2[\.\:\s\-–—]',
+                text, re.IGNORECASE | re.MULTILINE)
+            if fs_start and fs_end and fs_end.start() > fs_start.start():
+                text = text[:fs_start.start()] + text[fs_end.start():]
+        else:
+            # Item 8 = Financial Statements in 10-K
+            mentions_8 = _find_all_item_mentions(text, '8')
+            mentions_9 = _find_all_item_mentions(text, '9')
+            if mentions_8 and mentions_9:
+                item8_pos = mentions_8[0]['position']
+                item9_pos = mentions_9[0]['position']
+                if item9_pos > item8_pos:
+                    text = text[:item8_pos] + text[item9_pos:]
+
+        # 3. Remove everything after SIGNATURES / EXHIBIT INDEX
+        end_markers = ['SIGNATURES', 'EXHIBIT INDEX', 'POWER OF ATTORNEY']
+        end_position = len(text)
+        for marker in end_markers:
+            match = re.search(rf'(?:^|\n)\s*{marker}',
+                              text, re.IGNORECASE | re.MULTILINE)
+            if match:
+                end_position = min(end_position, match.start())
+        text = text[:end_position]
+
+        # 4. Strip XBRL inline markup residue
+        text = re.sub(r'ix:\w+', '', text)
+
+        # 5. Collapse runs of 3+ blank lines to 2
+        text = re.sub(r'\n{3,}', '\n\n', text)
+
+        return text.strip()
+
+    except Exception as e:
+        logger.warning(f"trim_filing_text failed ({e}) — attempting fallback")
+        # Try multiple fallback paths; filing_obj.text() may itself be broken
+        # (e.g. homepage.primary_html_document is None).
+        for method_name in ("text", "markdown", "html"):
+            try:
+                method = getattr(filing_obj, method_name, None)
+                if method is None:
+                    continue
+                result = method()
+                if result:
+                    return str(result).strip()
+            except Exception:
+                continue
+        # Last resort: return the repr so the pipeline can still log context
+        logger.error("trim_filing_text: all fallbacks failed, returning empty string")
+        return ""
+
+
+# --- Pydantic models for LLM section extraction --- #
+
+class ExtractedSection(BaseModel):
+    item_number: str
+    content: str
+
+class ExtractedSections(BaseModel):
+    sections: list[ExtractedSection]
+
+
+def llm_extract_sections(trimmed_text: str, items_needed: List[str],
+                          model: str = "gpt-4o-mini") -> dict:
+    """Use a single cheap LLM call to extract all missing sections from
+    the trimmed filing text.  Returns {item_number: content_text}."""
+    if not items_needed:
+        return {}
+
+    # Build item descriptions for prompt
+    item_descriptions = []
+    for item in items_needed:
+        defn = ITEM_DEFINITIONS_10K.get(item, {})
+        keywords = defn.get('keywords', [])
+        title = keywords[0] if keywords else f"Item {item}"
+        item_descriptions.append(f"  - Item {item}: {title}")
+    item_list_str = "\n".join(item_descriptions)
+
+    prompt = (
+        "You are an SEC filing section extractor. From the filing text below, "
+        "extract the full content of each requested Item section. "
+        "Return ONLY the content of each section — do not summarise.\n\n"
+        f"Sections needed:\n{item_list_str}\n\n"
+        "Filing text:\n" + trimmed_text
+    )
+
+    client = OpenAI()
+
+    try:
+        # If text is very long, chunk it and merge results
+        if len(trimmed_text) > 120_000:
+            chunks = chunk_text(trimmed_text, max_len=100_000, overlap=5_000)
+            all_sections = {}
+            for chunk in chunks:
+                chunk_prompt = (
+                    "You are an SEC filing section extractor. From the filing text below, "
+                    "extract the full content of each requested Item section. "
+                    "Return ONLY the content of each section — do not summarise. "
+                    "If a section is not present in this chunk, omit it.\n\n"
+                    f"Sections needed:\n{item_list_str}\n\n"
+                    "Filing text:\n" + chunk
+                )
+                resp = client.responses.parse(
+                    model=model,
+                    input=[{"role": "user", "content": chunk_prompt}],
+                    text_format=ExtractedSections,
+                ).output_parsed
+                for sec in resp.sections:
+                    # Keep longest extraction per item across chunks
+                    if sec.item_number in items_needed and len(sec.content) >= 100:
+                        existing = all_sections.get(sec.item_number, "")
+                        if len(sec.content) > len(existing):
+                            all_sections[sec.item_number] = sec.content
+            return all_sections
+        else:
+            resp = client.responses.parse(
+                model=model,
+                input=[{"role": "user", "content": prompt}],
+                text_format=ExtractedSections,
+            ).output_parsed
+            return {
+                sec.item_number: sec.content
+                for sec in resp.sections
+                if sec.item_number in items_needed and len(sec.content) >= 100
+            }
+
+    except Exception as e:
+        logger.warning(f"llm_extract_sections failed: {e}")
+        return {}
 
 
 def _find_10q_item_position(full_text, part, item_num, toc_end):

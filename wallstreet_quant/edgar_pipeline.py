@@ -43,10 +43,12 @@ try:
     from edgar_ai import *
     from edgar_extractor import extract_items_from_filing
     from edgar_extractor import fetch_10K_and_10Q_filings
+    from edgar_extractor import trim_filing_text, llm_extract_sections
 except:
     from wallstreet_quant.edgar_ai import *
     from wallstreet_quant.edgar_extractor import extract_items_from_filing
     from wallstreet_quant.edgar_extractor import fetch_10K_and_10Q_filings
+    from wallstreet_quant.edgar_extractor import trim_filing_text, llm_extract_sections
 import json
 from openai import OpenAI
 
@@ -121,40 +123,77 @@ class SecAnalysis:
                 # Use empty dicts to trigger fallback to whole filing
                 prev = {}
             
-            # --- section extractions with fallback to whole filing ------ #
+            # --- LLM extraction fallback for missing sections ----------- #
+            missing_curr = [item for item in items_needed if item not in curr or not curr[item]]
+            missing_prev = [item for item in items_needed if item not in prev or not prev[item]]
+
+            # Cache trimmed texts (lazy — only computed if needed)
+            trimmed_curr = None
+            trimmed_prev = None
+
+            if missing_curr or missing_prev:
+                trimmed_curr = trim_filing_text(flist[0])
+                if not trimmed_curr:
+                    logger.warning(f"{ticker}: Could not extract any text from current filing")
+            if missing_prev:
+                trimmed_prev = trim_filing_text(flist[1])
+                if not trimmed_prev:
+                    logger.warning(f"{ticker}: Could not extract any text from previous filing")
+
+            # Single LLM call per filing to extract all missing sections
+            if missing_curr and trimmed_curr:
+                logger.info(f"{ticker}: Regex missed {missing_curr} — LLM extracting from trimmed text")
+                try:
+                    llm_sections = llm_extract_sections(trimmed_curr, missing_curr)
+                    curr.update(llm_sections)
+                except Exception as e:
+                    logger.warning(f"{ticker}: LLM section extraction failed for curr: {e}")
+
+            if missing_prev and trimmed_prev:
+                logger.info(f"{ticker}: Regex missed {missing_prev} in prev filing — LLM extracting")
+                try:
+                    llm_sections = llm_extract_sections(trimmed_prev, missing_prev)
+                    prev.update(llm_sections)
+                except Exception as e:
+                    logger.warning(f"{ticker}: LLM section extraction failed for prev: {e}")
+
+            # --- section analyses with fallback to trimmed text ---------- #
             logger.debug(f"{ticker}: Starting LLM analysis...")
-            
+
             try:
                 if '1A' in prev and '1A' in curr and prev['1A'] and curr['1A']:
                     logger.debug(f"{ticker}: Risk Factor analysis - using extracted sections")
                     rf = risk_factor_analysis(prev['1A'], curr['1A'], model=model)
                 else:
-                    logger.warning(f"{ticker}: Risk Factor sections missing - using whole filing fallback")
-                    rf = risk_factor_analysis(flist[1].text(), flist[0].text(), model=model)
+                    logger.warning(f"{ticker}: Risk Factor sections missing - using trimmed filing fallback")
+                    rf = risk_factor_analysis(
+                        trimmed_prev or trim_filing_text(flist[1]),
+                        trimmed_curr or trim_filing_text(flist[0]),
+                        model=model)
                 logger.info(f"{ticker}: ✓ Risk Factor analysis completed")
             except Exception as e:
                 logger.error(f"{ticker}: ✗ Risk Factor Analysis FAILED: {e}")
                 rf = EXTRACTION_FAILED
-            
+
             try:
                 if '7' in curr and curr['7']:
                     logger.debug(f"{ticker}: MD&A analysis - using extracted section")
                     mda = mdad_analysis(curr['7'], model=model)
                 else:
-                    logger.warning(f"{ticker}: MD&A section missing - using whole filing fallback")
-                    mda = mdad_analysis(flist[0].text(), model=model)
+                    logger.warning(f"{ticker}: MD&A section missing - using trimmed filing fallback")
+                    mda = mdad_analysis(trimmed_curr or trim_filing_text(flist[0]), model=model)
                 logger.info(f"{ticker}: ✓ MD&A analysis completed")
             except Exception as e:
                 logger.error(f"{ticker}: ✗ MD&A Analysis FAILED: {e}")
                 mda = EXTRACTION_FAILED
-            
+
             try:
                 if '3' in curr and curr['3']:
                     logger.debug(f"{ticker}: Legal analysis - using extracted section")
                     leg = legal_matters(curr['3'], model=model)
                 else:
-                    logger.warning(f"{ticker}: Legal section missing - using whole filing fallback")
-                    leg = legal_matters(flist[0].text(), model=model)
+                    logger.warning(f"{ticker}: Legal section missing - using trimmed filing fallback")
+                    leg = legal_matters(trimmed_curr or trim_filing_text(flist[0]), model=model)
                 logger.info(f"{ticker}: ✓ Legal analysis completed")
             except Exception as e:
                 logger.error(f"{ticker}: ✗ Legal Matters Analysis FAILED: {e}")
@@ -165,55 +204,61 @@ class SecAnalysis:
                     logger.debug(f"{ticker}: Controls analysis - using extracted section")
                     ctrl = control_status(curr['9A'], model=model)
                 else:
-                    logger.warning(f"{ticker}: Controls section missing - using whole filing fallback")
-                    ctrl = control_status(flist[0].text(), model=model)
+                    logger.warning(f"{ticker}: Controls section missing - using trimmed filing fallback")
+                    ctrl = control_status(trimmed_curr or trim_filing_text(flist[0]), model=model)
                 logger.info(f"{ticker}: ✓ Controls analysis completed")
             except Exception as e:
                 logger.error(f"{ticker}: ✗ Control Status Analysis FAILED: {e}")
                 ctrl = EXTRACTION_FAILED
-            
+
             try:
                 if '1' in prev and '1' in curr and prev['1'] and curr['1']:
                     logger.debug(f"{ticker}: Business analysis - using extracted sections")
                     biz = business_info(prev['1'], curr['1'], model=model)
                 else:
-                    logger.warning(f"{ticker}: Business sections missing - using whole filing fallback")
-                    biz = business_info(flist[1].text(), flist[0].text(), model=model)
+                    logger.warning(f"{ticker}: Business sections missing - using trimmed filing fallback")
+                    biz = business_info(
+                        trimmed_prev or trim_filing_text(flist[1]),
+                        trimmed_curr or trim_filing_text(flist[0]),
+                        model=model)
                 logger.info(f"{ticker}: ✓ Business analysis completed")
             except Exception as e:
                 logger.error(f"{ticker}: ✗ Business Info Analysis FAILED: {e}")
                 biz = EXTRACTION_FAILED
-            
+
             try:
                 if '7' in prev and '7' in curr and prev['7'] and curr['7']:
                     tone = tone_shift_analysis(prev['7'], curr['7'], model=model)
                 else:
-                    logger.warning(f"{ticker}: MD&A sections missing for tone analysis - using whole filing fallback")
-                    tone = tone_shift_analysis(flist[1].text(), flist[0].text(), model=model)
+                    logger.warning(f"{ticker}: MD&A sections missing for tone analysis - using trimmed filing fallback")
+                    tone = tone_shift_analysis(
+                        trimmed_prev or trim_filing_text(flist[1]),
+                        trimmed_curr or trim_filing_text(flist[0]),
+                        model=model)
                 logger.info(f"{ticker}: ✓ Tone analysis completed")
             except Exception as e:
                 logger.error(f"{ticker}: ✗ Tone Shift Analysis FAILED: {e}")
                 tone = EXTRACTION_FAILED
-            
+
             try:
                 if '7' in curr and curr['7']:
                     logger.debug(f"{ticker}: Strategy analysis - using extracted section")
                     strat = strategy_summary_analysis(curr['7'], model=model)
                 else:
-                    logger.warning(f"{ticker}: MD&A section missing for strategy - using whole filing fallback")
-                    strat = strategy_summary_analysis(flist[0].text(), model=model)
+                    logger.warning(f"{ticker}: MD&A section missing for strategy - using trimmed filing fallback")
+                    strat = strategy_summary_analysis(trimmed_curr or trim_filing_text(flist[0]), model=model)
                 logger.info(f"{ticker}: ✓ Strategy analysis completed")
             except Exception as e:
                 logger.error(f"{ticker}: ✗ Strategy Summary Analysis FAILED: {e}")
                 strat = EXTRACTION_FAILED
-            
+
             try:
                 if '1' in curr and curr['1']:
                     logger.debug(f"{ticker}: Human capital analysis - using extracted section")
                     hc = human_capital_analysis(curr['1'], model=model)
                 else:
-                    logger.warning(f"{ticker}: Business section missing for human capital - using whole filing fallback")
-                    hc = human_capital_analysis(flist[0].text(), model=model)
+                    logger.warning(f"{ticker}: Business section missing for human capital - using trimmed filing fallback")
+                    hc = human_capital_analysis(trimmed_curr or trim_filing_text(flist[0]), model=model)
                 logger.info(f"{ticker}: ✓ Human capital analysis completed")
             except Exception as e:
                 logger.error(f"{ticker}: ✗ Human Capital Analysis FAILED: {e}")
@@ -316,10 +361,10 @@ class SecAnalysis:
             report: str
             recommendation: str
 
-        logger.debug(f"{ticker}: Calling o3 model for consolidation...")
+        logger.debug(f"{ticker}: Calling o3-pro model for consolidation...")
         resp = client.responses.parse(
-            model="o3",
-            input=[{"role": "system", "content": "You are a rigorous investment analyst. Your job is to analyze the data you are provided and produce a buy signal. Be very conservatice on buy signals. "},
+            model="o3-pro",
+            input=[{"role": "system", "content": "You are a rigorous investment analyst. Your job is to analyze the data you are provided and produce a buy signal. Weigh both positive catalysts (strong guidance, revenue growth, segment expansion, favorable tone shifts) and negative signals (new risks, legal exposure, weaknesses, hedging language) fairly. A 'positive' recommendation is appropriate when the positives materially outweigh the negatives — do not default to neutral."},
                    {"role": "user", "content": prompt}],
             text_format=ConsolidatedResponse,
         ).output_parsed
