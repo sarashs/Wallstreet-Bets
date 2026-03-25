@@ -959,8 +959,22 @@ def trim_filing_text(filing_obj) -> str:
         return text.strip()
 
     except Exception as e:
-        logger.warning(f"trim_filing_text failed ({e}) — returning raw text")
-        return filing_obj.text()
+        logger.warning(f"trim_filing_text failed ({e}) — attempting fallback")
+        # Try multiple fallback paths; filing_obj.text() may itself be broken
+        # (e.g. homepage.primary_html_document is None).
+        for method_name in ("text", "markdown", "html"):
+            try:
+                method = getattr(filing_obj, method_name, None)
+                if method is None:
+                    continue
+                result = method()
+                if result:
+                    return str(result).strip()
+            except Exception:
+                continue
+        # Last resort: return the repr so the pipeline can still log context
+        logger.error("trim_filing_text: all fallbacks failed, returning empty string")
+        return ""
 
 
 # --- Pydantic models for LLM section extraction --- #

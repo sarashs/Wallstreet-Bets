@@ -133,11 +133,15 @@ class SecAnalysis:
 
             if missing_curr or missing_prev:
                 trimmed_curr = trim_filing_text(flist[0])
+                if not trimmed_curr:
+                    logger.warning(f"{ticker}: Could not extract any text from current filing")
             if missing_prev:
                 trimmed_prev = trim_filing_text(flist[1])
+                if not trimmed_prev:
+                    logger.warning(f"{ticker}: Could not extract any text from previous filing")
 
             # Single LLM call per filing to extract all missing sections
-            if missing_curr:
+            if missing_curr and trimmed_curr:
                 logger.info(f"{ticker}: Regex missed {missing_curr} — LLM extracting from trimmed text")
                 try:
                     llm_sections = llm_extract_sections(trimmed_curr, missing_curr)
@@ -145,7 +149,7 @@ class SecAnalysis:
                 except Exception as e:
                     logger.warning(f"{ticker}: LLM section extraction failed for curr: {e}")
 
-            if missing_prev:
+            if missing_prev and trimmed_prev:
                 logger.info(f"{ticker}: Regex missed {missing_prev} in prev filing — LLM extracting")
                 try:
                     llm_sections = llm_extract_sections(trimmed_prev, missing_prev)
@@ -357,10 +361,10 @@ class SecAnalysis:
             report: str
             recommendation: str
 
-        logger.debug(f"{ticker}: Calling o3 model for consolidation...")
+        logger.debug(f"{ticker}: Calling o3-pro model for consolidation...")
         resp = client.responses.parse(
-            model="o3",
-            input=[{"role": "system", "content": "You are a rigorous investment analyst. Your job is to analyze the data you are provided and produce a buy signal. Be very conservatice on buy signals. "},
+            model="o3-pro",
+            input=[{"role": "system", "content": "You are a rigorous investment analyst. Your job is to analyze the data you are provided and produce a buy signal. Weigh both positive catalysts (strong guidance, revenue growth, segment expansion, favorable tone shifts) and negative signals (new risks, legal exposure, weaknesses, hedging language) fairly. A 'positive' recommendation is appropriate when the positives materially outweigh the negatives — do not default to neutral."},
                    {"role": "user", "content": prompt}],
             text_format=ConsolidatedResponse,
         ).output_parsed

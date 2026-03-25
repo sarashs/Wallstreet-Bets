@@ -50,6 +50,7 @@ Use your own judgment or consult with a qualified professional before making any
 | **REIT_analysis** | Analysing and finding independent high-dividend REITs for investment |
 | **Magic_formula** | Modified Greenblatt Magic Formula for screening stocks with LLM-powered 10-K analysis via the `wallstreet_quant` package |
 | **Companies_competitive_relationship** | Extract and visualize self-reported competitive relationships between companies using SEC 10-K filings with AI-powered analysis and network graphs |
+| **Fundamental_analysis** | Standalone SEC 10-K/10-Q report generator — given a list of tickers, runs LLM-powered filing analysis and exports results with sentiment (positive/neutral/negative) to Excel |
 | **short_squeeze_detection** | Statistical signals for identifying potential short-squeeze candidates |
 
 ---
