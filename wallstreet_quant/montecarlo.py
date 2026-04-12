@@ -165,7 +165,8 @@ class NaiveMonteCarlo(AbstractMonteCarlo):
         self.alpha_correction = alpha_correction
         if weights is not None:
             assert len(tickers) == len(weights), "Length of tickers and weights must match."
-            self.weights = np.array(weights) / np.sum(weights)
+            self.weights = np.array(weights, dtype=float)
+            assert np.isclose(self.weights.sum(), 1.0), f"Weights must sum to 1.0, got {self.weights.sum():.6f}"
         else:
             # Default to equal weights if not provided
             self.weights = np.ones(len(tickers)) / len(tickers)
