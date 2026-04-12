@@ -10,15 +10,23 @@ Procedure (per spec §6.1):
     3. Compute cumulative log-return per stock
     4. Convert to simple return and compute weighted portfolio return
 
-Correlation structure (spec §6.2, Option A):
-  Gaussian copula based on the Spearman rank-correlation matrix.
-  Each day's cross-stock returns are correlated via:
-    z ~ MVN(0, I_N)  → correlated: u = Φ(L @ z) → returns via F_i^{-1}
+Correlation structure:
+  Student-t copula (default) or Gaussian copula based on the Spearman
+  rank-correlation matrix.  The t-copula introduces tail dependence so that
+  joint extreme moves (crashes) are more probable than under a Gaussian copula.
+
+  Generation (t-copula):
+    z ~ MVN(0, I_N)  →  z_corr = L @ z
+    w ~ χ²(copula_df) / copula_df   (shared across all N stocks on each day)
+    t_corr = z_corr / sqrt(w)       (multivariate-t innovations)
+
+  When copula_df → ∞ this reduces to the Gaussian copula.
 
 Public API
 ----------
 run_forward_simulation(config, posterior_a, posterior_b, returns, spearman_corr,
-                       weights, tickers, horizon_days, n_sim, seed) -> dict
+                       weights, tickers, horizon_days, n_sim, seed,
+                       copula_df) -> dict
 compute_risk_metrics(portfolio_returns, horizon_days) -> dict
 """
 
@@ -45,6 +53,7 @@ def run_forward_simulation(
     n_sim: int = 10_000,
     seed: int = 0,
     progress_callback=None,
+    copula_df: float = 5.0,
 ) -> dict:
     """Run forward Monte Carlo simulation.
 
@@ -62,9 +71,10 @@ def run_forward_simulation(
     w = np.asarray(weights, dtype=float)
     w = w / w.sum()   # normalise
 
+    copula_type = "Gaussian" if copula_df is None or copula_df >= 200 else f"t(df={copula_df:.0f})"
     logger.info(
-        "Forward simulation: model=%s, N=%d stocks, T=%d days, n_sim=%d",
-        selected_model, N, horizon_days, n_sim,
+        "Forward simulation: model=%s, N=%d stocks, T=%d days, n_sim=%d, copula=%s",
+        selected_model, N, horizon_days, n_sim, copula_type,
     )
 
     # Cholesky of Spearman correlation for copula
@@ -92,9 +102,9 @@ def run_forward_simulation(
             params  = posterior_samples[s_idx]
 
             if selected_model == "A":
-                daily_r = _simulate_model_a(params, N, horizon_days, L, rng)
+                daily_r = _simulate_model_a(params, N, horizon_days, L, rng, copula_df)
             else:
-                daily_r = _simulate_model_b(params, N, horizon_days, L, rng)
+                daily_r = _simulate_model_b(params, N, horizon_days, L, rng, copula_df)
 
             # Cumulative log-return path (portfolio level)
             log_r_port  = (daily_r * w[:, None]).sum(axis=0)   # (T,) daily portfolio log-ret
@@ -144,13 +154,14 @@ def _simulate_model_a(
     T: int,
     L: np.ndarray,
     rng: np.random.Generator,
+    copula_df: float | None = 5.0,
 ) -> np.ndarray:
     """Simulate T daily log-returns for N stocks under Model A (Student-t).
 
     Uses data-augmentation representation:
         λ_it ~ Gamma(ν/2, ν/2)
         r_it = μ_i + σ_i * z_corr_it / sqrt(λ_it)
-    where z_corr = L @ z, z ~ N(0, I).
+    where z_corr are copula-correlated innovations (t-copula or Gaussian).
 
     Returns
     -------
@@ -160,11 +171,10 @@ def _simulate_model_a(
     sigma_i = params[N:2*N]
     nu      = params[2*N]
 
-    # Correlated standard normals via Cholesky copula
-    z       = rng.standard_normal((T, N))    # (T, N)
-    z_corr  = z @ L.T                        # (T, N) correlated
+    # Correlated innovations via copula
+    z_corr = _copula_innovations(T, N, L, rng, copula_df)   # (T, N)
 
-    # Scale-mixture (Student-t via Gamma augmentation)
+    # Scale-mixture (Student-t via Gamma augmentation) — per-stock, independent
     lam     = rng.gamma(nu / 2.0, 2.0 / nu, size=(T, N))   # (T, N)
 
     daily_r = mu_i + sigma_i * z_corr / np.sqrt(lam)        # (T, N)
@@ -177,13 +187,14 @@ def _simulate_model_b(
     T: int,
     L: np.ndarray,
     rng: np.random.Generator,
+    copula_df: float | None = 5.0,
 ) -> np.ndarray:
     """Simulate T daily log-returns for N stocks under Model B (Normal mixture).
 
     Each day:
         k_it ~ Bernoulli(π_i)
         r_it = μ_i,k + σ_i,k * z_corr_it
-    where z_corr = L @ z for the within-day correlation.
+    where z_corr are copula-correlated innovations (t-copula or Gaussian).
 
     Returns
     -------
@@ -195,9 +206,8 @@ def _simulate_model_b(
     sigma_ik = params[p:p+2*N].reshape(N, 2);  p += 2*N
     pi_i     = params[p:p+N];                  p += N
 
-    # Correlated standard normals
-    z      = rng.standard_normal((T, N))   # (T, N)
-    z_corr = z @ L.T                       # (T, N)
+    # Correlated innovations via copula
+    z_corr = _copula_innovations(T, N, L, rng, copula_df)   # (T, N)
 
     # Regime selection per stock per day
     u_regime  = rng.random((T, N))         # independent uniform for regime draw
@@ -324,6 +334,61 @@ def _fan_chart_percentiles(cum_paths: np.ndarray) -> dict:
 # ---------------------------------------------------------------------------
 # Helpers
 # ---------------------------------------------------------------------------
+
+def _copula_innovations(
+    T: int,
+    N: int,
+    L: np.ndarray,
+    rng: np.random.Generator,
+    copula_df: float | None,
+) -> np.ndarray:
+    """Generate (T, N) correlated innovations using a Gaussian or Student-t copula.
+
+    Parameters
+    ----------
+    T : int
+        Number of time steps.
+    N : int
+        Number of stocks.
+    L : np.ndarray, shape (N, N)
+        Lower Cholesky factor of the Spearman correlation matrix.
+    rng : np.random.Generator
+    copula_df : float or None
+        Degrees of freedom for the t-copula.  If None or >= 200 the Gaussian
+        copula is used (equivalent to df → ∞).
+
+    Returns
+    -------
+    np.ndarray, shape (T, N) — correlated innovations with unit marginal variance.
+
+    Notes
+    -----
+    The t-copula shares a single χ² draw across all N stocks on each day,
+    creating tail dependence: when the shared scaling variable is small every
+    stock receives a large innovation simultaneously.
+
+    Marginal variance of a t(df) is df/(df-2), so we rescale by
+    sqrt((df-2)/df) to keep the marginal variance at 1.  This ensures the
+    per-stock μ and σ parameters from the MCMC posterior retain their
+    calibrated meaning.
+    """
+    z      = rng.standard_normal((T, N))   # (T, N)
+    z_corr = z @ L.T                       # (T, N) — correlated Gaussian
+
+    use_gaussian = copula_df is None or copula_df >= 200
+    if use_gaussian:
+        return z_corr
+
+    # Shared chi-squared scaling — one draw per day, broadcast across stocks
+    # w ~ chi2(df)/df, so 1/sqrt(w) inflates on bad days
+    w = rng.chisquare(copula_df, size=(T, 1)) / copula_df   # (T, 1)
+    t_corr = z_corr / np.sqrt(w)                             # (T, N)
+
+    # Rescale so marginal variance = 1 (raw t has var = df/(df-2))
+    t_corr *= np.sqrt((copula_df - 2.0) / copula_df)
+
+    return t_corr
+
 
 def _safe_cholesky(C: np.ndarray) -> np.ndarray:
     """Return lower Cholesky factor of C with a small ridge if needed."""

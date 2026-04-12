@@ -308,17 +308,25 @@ Main simulation loop:
 ```
 For s = 1, ..., n_sim:
     1. Draw a posterior parameter vector (random index into posterior_samples)
-    2. Generate T_horizon daily returns using Gaussian copula:
+    2. Generate T_horizon daily returns using Student-t copula (or Gaussian):
          z      ~ MVN(0, I_N)          (standard normals per stock)
          z_corr = L @ z               (apply Cholesky of Spearman corr.)
-         Model A: r_it = μ_i + σ_i × z_corr_it / sqrt(λ_it)
+         w      ~ χ²(copula_df) / copula_df   (shared across all stocks per day)
+         t_corr = z_corr / sqrt(w) × sqrt((df-2)/df)   (t-copula innovations)
+         Model A: r_it = μ_i + σ_i × t_corr_it / sqrt(λ_it)
                   λ_it ~ Gamma(ν/2, ν/2)
          Model B: k_it ~ Bernoulli(π_i)
-                  r_it = μ_i,k + σ_i,k × z_corr_it
+                  r_it = μ_i,k + σ_i,k × t_corr_it
     3. Cumulative log-return per stock: R_i = sum_t r_it
     4. Simple return: exp(R_i) − 1
     5. Portfolio return: Σ_i w_i × (exp(R_i) − 1)
 ```
+
+The `copula_df` parameter (default 5) controls tail dependence.  The shared χ²
+draw means all stocks receive inflated innovations on the same "bad days",
+producing realistic crash clustering.  Setting copula_df ≥ 200 recovers the
+Gaussian copula.  The `sqrt((df-2)/df)` rescaling preserves unit marginal
+variance so that posterior μ and σ parameters keep their calibrated meaning.
 
 Returns per-path cumulative curves for the fan chart plus terminal returns
 for all risk metrics.
@@ -506,18 +514,24 @@ WAIC   = Σ_i waic_i
 SE = sqrt(n_obs × Var_i(waic_i))
 ```
 
-### 5.5 Forward Simulation with Gaussian Copula
+### 5.5 Forward Simulation with Student-t Copula
 
 **Correlation structure:** Spearman rank-correlation matrix C of historical returns.
 Cholesky factorisation: `L = cholesky(C)`.
 
 **Per-simulation, per-day (Model A):**
 ```python
-z     ~ Normal(0, I_N)          # independent standard normals
-z_corr = L @ z                   # correlated via Cholesky copula
-λ     ~ Gamma(ν/2, 2/ν, N)      # scale-mixture weights
-r_t   = μ + σ × z_corr / sqrt(λ)  # correlated Student-t returns
+z      ~ Normal(0, I_N)          # independent standard normals
+z_corr = L @ z                   # correlated via Cholesky
+w      ~ χ²(df_c) / df_c        # shared copula scaling (1 draw per day)
+t_corr = z_corr / sqrt(w) * sqrt((df_c - 2) / df_c)  # t-copula innovations
+λ      ~ Gamma(ν/2, 2/ν, N)     # per-stock scale-mixture weights (Model A only)
+r_t    = μ + σ × t_corr / sqrt(λ)  # correlated Student-t returns
 ```
+
+The shared `w` draw creates tail dependence: when `w` is small, every stock
+receives an inflated innovation on the same day.  The `sqrt((df_c-2)/df_c)`
+factor normalises the marginal variance to 1.
 
 **Cumulative portfolio return:**
 ```python
@@ -634,9 +648,10 @@ accuracy gain for model selection.
 1. **No within-Python parallelism:** The 4 chains run sequentially. True parallelism
    (via `multiprocessing`) would give ~3× speedup.
 
-2. **Spearman copula is an approximation:** The Gaussian copula with Spearman
-   correlation is a convenient approximation. A full multivariate model would be
-   more accurate but significantly more complex to implement and sample.
+2. **Copula is a plug-in estimate:** The Spearman correlation matrix used by the
+   Student-t copula is a single point estimate — it carries no posterior
+   uncertainty, unlike the marginal parameters.  A Wishart posterior or Bayesian
+   bootstrap over the correlation would propagate this uncertainty.
 
 3. **WAIC subsampling:** We use 300 posterior draws for WAIC (out of potentially
    10,000). This is a statistical approximation. Using more draws improves precision
@@ -653,7 +668,7 @@ accuracy gain for model selection.
 
 - [ ] Parallel chain execution via `concurrent.futures`
 - [ ] NUTS (No-U-Turn Sampler) for more efficient exploration of complex posteriors
-- [ ] Full multivariate correlated returns (Option B in the spec §6.2)
+- [x] Student-t copula for tail dependence (replaces Gaussian copula, configurable df)
 - [ ] Regime-dependent correlation matrices for Model B
 - [ ] Backtesting module with rolling-window calibration test
 - [ ] Export to PDF report

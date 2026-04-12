@@ -310,19 +310,28 @@ The models above treat stocks as conditionally independent given their parameter
 
 However, for more accurate portfolio-level simulations, you may want to model the residual correlation explicitly. Two options:
 
-**Option A (recommended for v1): Empirical copula.** After simulating independent returns per stock, re-order them to match the empirical rank-correlation structure from the historical data. This is a Gaussian copula approximation.
+**Implemented: Student-t copula.** Cross-stock dependence is modelled using a
+Student-t copula on the Spearman rank-correlation matrix.  A shared χ²/df draw
+per day inflates all stocks simultaneously, creating tail dependence (realistic
+crash clustering).  The `copula_df` parameter (default 5) controls the strength
+of this effect — lower df means fatter joint tails.  Setting df ≥ 200 recovers
+the Gaussian copula.
 
 ```python
 # 1. Compute historical rank correlation matrix C (Spearman)
 # 2. Cholesky decompose: L = cholesky(C)
-# 3. For each simulation s:
+# 3. For each simulation day t:
 #    a. Draw z ~ MVN(0, I) of dimension N
-#    b. Correlated draws: u = Φ(L @ z), where Φ is standard normal CDF
-#    c. For each stock i, use u_i as the quantile:
-#       r_it = F_i^{-1}(u_i), where F_i is the CDF of stock i's posterior predictive
+#    b. Correlated normals: z_corr = L @ z
+#    c. Shared tail shock: w ~ χ²(df) / df     (one scalar per day)
+#    d. t-copula innovations: t_corr = z_corr / sqrt(w) * sqrt((df-2)/df)
+#    e. Apply per-stock marginal: r_it = μ_i + σ_i × t_corr_it [/ sqrt(λ_it)]
 ```
 
-**Option B (future): Full multivariate model.** Replace the stock-level priors with a multivariate normal on the vector `(μ_1, ..., μ_N)` with an estimated covariance matrix. This is significantly more complex to implement and sample.
+The `sqrt((df-2)/df)` rescaling keeps marginal variance at 1 so that the MCMC
+posterior parameters retain their calibrated meaning.
+
+**Future: Full multivariate model.** Replace the stock-level priors with a multivariate normal on the vector `(μ_1, ..., μ_N)` with an estimated covariance matrix. This is significantly more complex to implement and sample.
 
 ### 6.3 Portfolio Weighting
 

@@ -698,7 +698,7 @@ def render_tab2():
     # -----------------------------------------------------------------------
     st.subheader("Simulation Settings")
 
-    col_s1, col_s2, col_s3 = st.columns(3)
+    col_s1, col_s2, col_s3, col_s4 = st.columns(4)
     with col_s1:
         horizon_days = st.number_input(
             "Simulation horizon (trading days)",
@@ -712,6 +712,14 @@ def render_tab2():
         )
     with col_s3:
         sim_seed = st.number_input("Random seed", min_value=0, max_value=99999, value=0)
+    with col_s4:
+        copula_df = st.number_input(
+            "Copula degrees of freedom",
+            min_value=3, max_value=200, value=5, step=1,
+            help="t-copula df controls tail dependence. Lower = fatter joint tails "
+                 "(more simultaneous crashes). 5 is a common default. "
+                 "200 ≈ Gaussian copula (no extra tail dependence)."
+        )
 
     st.markdown("---")
 
@@ -741,6 +749,7 @@ def render_tab2():
                     n_sim             = int(n_sim),
                     seed              = int(sim_seed),
                     progress_callback = lambda f: prog_bar.progress(f),
+                    copula_df         = int(copula_df),
                 )
                 st.session_state.sim_result = {
                     "result" : result,
