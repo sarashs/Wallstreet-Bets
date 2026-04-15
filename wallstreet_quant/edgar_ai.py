@@ -357,6 +357,162 @@ def competitors_analysis(company_name: str, section_item: str, model: str = "gpt
                 test_competitors.add(competitor)
     return test_competitors
 
+# ---------- 10. Short Squeeze Catalyst Detection (Item 7 MD&A) ----------
+class CatalystItem(BaseModel):
+    catalyst: str
+    category: str  # turnaround, product_launch, regulatory_win, activist, restructuring, other
+    strength: str  # strong, moderate, weak
+
+class SqueezeCatalystAnalysis(BaseModel):
+    catalysts_detected: bool
+    catalysts: List[CatalystItem] = []
+    overall_catalyst_strength: str  # strong, moderate, weak, none
+    summary: str
+
+def squeeze_catalyst_detection(section_text: str, model: str = "gpt-5.2-pro") -> SqueezeCatalystAnalysis:
+    """Analyze SEC filing section for positive catalysts that could trigger short covering."""
+    prompt = f"""
+    You are analyzing an SEC filing section (MD&A or Risk Factors) specifically to identify
+    POSITIVE CATALYSTS that could trigger short sellers to cover their positions, causing a
+    short squeeze.
+
+    Look for:
+    1. TURNAROUND signals: improving margins, cost restructuring bearing fruit, return to profitability
+    2. NEW PRODUCT/SERVICE launches: upcoming catalysts that could drive revenue surprise
+    3. REGULATORY WINS: FDA approvals, patent grants, favorable rulings
+    4. ACTIVIST INVESTOR involvement: known activists taking positions, board changes, strategic reviews
+    5. RESTRUCTURING: divestitures, spin-offs, or strategic pivots that could unlock value
+    6. GUIDANCE IMPROVEMENTS: raised forecasts, accelerating growth, beat-and-raise patterns
+
+    For each catalyst found, assess its strength as a potential short squeeze trigger:
+    - "strong": concrete, near-term, and material (e.g., FDA approval expected Q2)
+    - "moderate": directional but uncertain timing (e.g., "exploring strategic alternatives")
+    - "weak": vague or long-term (e.g., "investing in innovation")
+
+    If the filing text is generic corporate boilerplate with no real catalysts, set
+    catalysts_detected=false and overall_catalyst_strength="none".
+
+    SECTION TEXT:
+    {section_text}
+    """
+    output = client.responses.parse(
+        model=model,
+        input=[
+            {"role": "system", "content": "You are a rigorous SEC-filing analyst specializing in short squeeze dynamics. "
+             "Your job is to identify positive catalysts that could force short sellers to cover. "
+             "Be conservative -- only flag real, material catalysts, not generic corporate language."},
+            {"role": "user", "content": prompt}
+        ],
+        text_format=SqueezeCatalystAnalysis
+    ).output_parsed
+    return output
+
+
+# ---------- 11. Ownership Dynamics Analysis ----------
+class OwnershipSignal(BaseModel):
+    signal_type: str  # buyback, insider_buying, institutional_accumulation, concentrated_ownership, float_reduction
+    description: str
+    bullish: bool
+
+class OwnershipDynamicsAnalysis(BaseModel):
+    signals_detected: bool
+    signals: List[OwnershipSignal] = []
+    float_pressure_assessment: str  # high, moderate, low, none
+    summary: str
+
+def ownership_dynamics_analysis(section_text: str, model: str = "gpt-5.2-pro") -> OwnershipDynamicsAnalysis:
+    """Analyze SEC filing for ownership dynamics that could contribute to a short squeeze."""
+    prompt = f"""
+    You are analyzing an SEC filing to identify OWNERSHIP DYNAMICS that could contribute
+    to a short squeeze scenario. These signals reduce available float or indicate
+    informed buying pressure.
+
+    Look for mentions of:
+    1. STOCK BUYBACKS: active repurchase programs, accelerated buybacks, new authorizations
+    2. INSIDER BUYING: officers or directors purchasing shares on the open market
+    3. INSTITUTIONAL ACCUMULATION: large holders increasing positions, 13D/13G filings mentioned
+    4. CONCENTRATED OWNERSHIP: high insider/institutional ownership reducing tradeable float
+    5. FLOAT REDUCTION: any mechanism reducing shares available for trading (conversions,
+       lockups expiring but holders not selling)
+
+    For each signal, note whether it is BULLISH for a squeeze scenario (reduces available
+    shares for shorts to borrow) or not.
+
+    Assess overall float_pressure_assessment:
+    - "high": multiple signals of float reduction + active buying
+    - "moderate": some buyback activity or moderate insider buying
+    - "low": mentioned but immaterial
+    - "none": no relevant signals found
+
+    SECTION TEXT:
+    {section_text}
+    """
+    output = client.responses.parse(
+        model=model,
+        input=[
+            {"role": "system", "content": "You are a rigorous SEC-filing analyst specializing in ownership structure "
+             "and float analysis. Identify signals that reduce tradeable float or indicate informed buying pressure."},
+            {"role": "user", "content": prompt}
+        ],
+        text_format=OwnershipDynamicsAnalysis
+    ).output_parsed
+    return output
+
+
+# ---------- 12. Short Seller Vulnerability Assessment (Item 1A Risk Factors) ----------
+class VulnerabilityFactor(BaseModel):
+    factor: str
+    description: str
+    severity: str  # high, moderate, low
+
+class ShortVulnerabilityAnalysis(BaseModel):
+    vulnerability_detected: bool
+    factors: List[VulnerabilityFactor] = []
+    overall_vulnerability: str  # high, moderate, low, none
+    summary: str
+
+def short_vulnerability_assessment(section_text: str, model: str = "gpt-5.2-pro") -> ShortVulnerabilityAnalysis:
+    """Analyze Risk Factors to assess how vulnerable short sellers are in this stock."""
+    prompt = f"""
+    You are analyzing an SEC filing's Risk Factors section to assess whether SHORT SELLERS
+    are particularly VULNERABLE in this stock. This is the inverse of typical risk analysis --
+    you are looking for factors that make the SHORT THESIS fragile.
+
+    Look for:
+    1. EXPLICIT SHORT SELLING MENTIONS: company discussing short selling of its stock,
+       short squeezes, or stock price volatility driven by short interest
+    2. THIN FLOAT warnings: low public float, high insider ownership, limited liquidity
+    3. STOCK PRICE VOLATILITY language: acknowledgment of extreme price movements,
+       meme stock dynamics, social media driven trading
+    4. DEFENSIVE MEASURES: poison pills, shareholder rights plans, anti-dilution provisions
+       that could hurt shorts
+    5. BINARY EVENT RISK: upcoming catalysts (trials, rulings, earnings) where a positive
+       outcome would cause rapid price appreciation
+    6. HARD-TO-BORROW indicators: mentions of share lending, securities lending programs,
+       or difficulty in borrowing shares
+
+    Assess overall vulnerability:
+    - "high": explicit short selling mentions + thin float + binary catalysts
+    - "moderate": some vulnerability factors present
+    - "low": standard risk factors, nothing specific to shorts
+    - "none": no relevant factors
+
+    SECTION TEXT:
+    {section_text}
+    """
+    output = client.responses.parse(
+        model=model,
+        input=[
+            {"role": "system", "content": "You are a rigorous SEC-filing analyst. Your specific task is to assess "
+             "how vulnerable short sellers are in this stock based on the risk factor disclosures. "
+             "Focus on factors that could cause forced covering or rapid price appreciation."},
+            {"role": "user", "content": prompt}
+        ],
+        text_format=ShortVulnerabilityAnalysis
+    ).output_parsed
+    return output
+
+
 # Example usage:
 #risk = risk_factor_analysis(prev['1A'], last['1A'], model="gpt-4o")
 #mdad = mdad_analysis(last['7'], model="gpt-4o")
