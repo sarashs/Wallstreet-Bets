@@ -85,6 +85,7 @@ class ShortSqueezeScanner:
 
     FMP_BASE = "https://financialmodelingprep.com/api/v3"
     FTD_BASE = "https://www.sec.gov/files/data/fails-deliver-data"
+    SEC_HEADERS = {"User-Agent": os.getenv("edgar_identity", "WallstreetBets research@example.com")}
 
     def __init__(self, fmp_api_key: Optional[str] = None,
                  batch_delay: float = 0.25,
@@ -110,7 +111,7 @@ class ShortSqueezeScanner:
         ym = f"{year}{month:02d}"
         url = f"{self.FTD_BASE}/cnsfails{ym}{half}.zip"
         try:
-            resp = requests.get(url, timeout=30)
+            resp = requests.get(url, headers=self.SEC_HEADERS, timeout=30)
             resp.raise_for_status()
             with zipfile.ZipFile(io.BytesIO(resp.content)) as zf:
                 csv_name = zf.namelist()[0]
@@ -157,6 +158,62 @@ class ShortSqueezeScanner:
         print(f"  FTD data loaded: {len(self._ftd_cache)} records across {months_back} months")
         return self._ftd_cache
 
+    # ------------------------------------------------------------------
+    # Short Interest Module (yfinance)
+    # ------------------------------------------------------------------
+
+    def compute_short_interest_signals(self, ticker: str) -> dict:
+        """Fetch short interest data from Yahoo Finance.
+
+        Returns short percent of float, days-to-cover (short ratio),
+        and month-over-month change in shares short.
+        """
+        import yfinance as yf
+
+        result = {
+            "shares_short": 0, "short_pct_float": 0.0, "days_to_cover": 0.0,
+            "shares_short_prior_month": 0, "short_interest_change": 0.0,
+            "float_shares": 0, "si_score": 0.0,
+        }
+
+        try:
+            info = yf.Ticker(ticker).info
+            result["shares_short"] = info.get("sharesShort") or 0
+            result["short_pct_float"] = info.get("shortPercentOfFloat") or 0.0
+            result["days_to_cover"] = info.get("shortRatio") or 0.0
+            result["shares_short_prior_month"] = info.get("sharesShortPriorMonth") or 0
+            result["float_shares"] = info.get("floatShares") or 0
+
+            # Month-over-month change in shares short
+            prior = result["shares_short_prior_month"]
+            current = result["shares_short"]
+            if prior > 0 and current > 0:
+                result["short_interest_change"] = round((current / prior - 1) * 100, 2)
+        except Exception as e:
+            logger.debug(f"Short interest fetch failed for {ticker}: {e}")
+
+        # SI score (0-25)
+        score = 0.0
+        # Short percent of float (0-12): >10% is notable, >20% is extreme
+        spf = result["short_pct_float"]
+        if spf > 0.05:
+            score += min(spf * 50, 12)  # 5%→2.5, 10%→5, 20%→10, 24%+=12
+        # Days to cover (0-8): higher = harder for shorts to exit
+        dtc = result["days_to_cover"]
+        if dtc > 2:
+            score += min((dtc - 2) * 1.0, 8)  # 4d→2, 6d→4, 10d+=8
+        # SI increasing month-over-month (0-5): shorts piling in
+        si_chg = result["short_interest_change"]
+        if si_chg > 5:
+            score += min((si_chg - 5) * 0.25, 5)  # 15%→2.5, 25%+=5
+
+        result["si_score"] = round(min(score, 25), 2)
+        return result
+
+    # ------------------------------------------------------------------
+    # FTD Signal Module
+    # ------------------------------------------------------------------
+
     def compute_ftd_signals(self, ticker: str, ftd_df: pd.DataFrame,
                             avg_volume: float = 0) -> dict:
         """Compute FTD-based squeeze signals for a single ticker."""
@@ -202,21 +259,21 @@ class ShortSqueezeScanner:
         if avg_volume > 0:
             result["ftd_ratio"] = round(result["ftd_avg_daily_fails"] / avg_volume, 4)
 
-        # Score (0-30)
+        # Score (0-20)
         score = 0.0
-        # ftd_ratio component (0-15)
-        score += min(result["ftd_ratio"] * 500, 15)
-        # Trend bonus (0-8)
+        # ftd_ratio component (0-10)
+        score += min(result["ftd_ratio"] * 500, 10)
+        # Trend bonus (0-5)
         if result["ftd_trend"] == "increasing":
-            score += 8
+            score += 5
         elif result["ftd_trend"] == "stable":
-            score += 3
-        # Persistence (0-7): days with fails / total days
+            score += 2
+        # Persistence (0-5): days with fails / total days
         total_days = len(daily) if len(daily) > 0 else 1
         persistence = result["ftd_days_with_fails"] / total_days
-        score += min(persistence * 7, 7)
+        score += min(persistence * 5, 5)
 
-        result["ftd_score"] = round(min(score, 30), 2)
+        result["ftd_score"] = round(min(score, 20), 2)
         return result
 
     # ------------------------------------------------------------------
@@ -268,12 +325,20 @@ class ShortSqueezeScanner:
             return None
 
     def compute_volume_price_signals(self, ticker: str) -> dict:
-        """Compute volume and price-based squeeze signals."""
+        """Compute volume and price-based squeeze signals.
+
+        Scores both *active* setups (volume surging, price moving) and
+        *dormant/coiling* setups (volume drying up, tight Bollinger Bands,
+        flat price) — the classic pre-squeeze pattern where sellers are
+        exhausted and volatility is compressed before a sharp move.
+        """
         result = {
             "price": 0.0, "market_cap": 0, "avg_volume": 0,
             "volume_spike_ratio": 0.0, "relative_volume_5d": 0.0,
+            "volume_dryup": 0.0,
             "price_momentum_5d": 0.0, "price_momentum_10d": 0.0,
-            "bb_width": 0.0, "bb_squeeze": False, "vp_score": 0.0,
+            "bb_width": 0.0, "bb_squeeze": False, "bb_width_contraction": 0.0,
+            "vp_score": 0.0,
         }
 
         # Quote data from FMP
@@ -308,6 +373,9 @@ class ShortSqueezeScanner:
             overall = np.mean(volumes)
             if overall > 0:
                 result["relative_volume_5d"] = round(recent_5d / overall, 2)
+                # Volume dry-up: how much recent volume has declined vs overall
+                # Values > 0 mean volume is contracting (sellers exhausted)
+                result["volume_dryup"] = round(max(1 - recent_5d / overall, 0), 2)
 
         # Price momentum
         if len(closes) >= 6:
@@ -318,7 +386,6 @@ class ShortSqueezeScanner:
         # Bollinger Band width & squeeze
         if len(closes) >= 20:
             sma20 = np.convolve(closes, np.ones(20) / 20, mode="valid")
-            # Compute rolling std for the same window
             bb_widths = []
             for i in range(len(closes) - 19):
                 window = closes[i:i + 20]
@@ -333,21 +400,45 @@ class ShortSqueezeScanner:
                 # Squeeze = current width in lowest 10th percentile of its own history
                 threshold = np.percentile(bb_widths, 10)
                 result["bb_squeeze"] = bool(bb_widths[-1] <= threshold)
+                # BB contraction: how much bands have narrowed from their median
+                median_width = np.median(bb_widths)
+                if median_width > 0:
+                    result["bb_width_contraction"] = round(
+                        max(1 - bb_widths[-1] / median_width, 0), 2
+                    )
 
         # Volume/Price score (0-35)
+        # Two pathways contribute — active squeeze AND dormant/coiling setup
         score = 0.0
-        # Volume spike (0-10)
+
+        # --- Active signals ---
+        # Volume spike (0-6)
         vs = result["volume_spike_ratio"]
         if vs > 1:
-            score += min((vs - 1) * 5, 10)
-        # BB squeeze bonus (0-8)
-        if result["bb_squeeze"]:
-            score += 8
-        # Momentum (0-10): use 5d momentum
+            score += min((vs - 1) * 3, 6)
+        # Positive momentum (0-6)
         mom = result["price_momentum_5d"]
         if mom > 0:
-            score += min(mom * 1.5, 10)
-        # Small-cap bonus (0-7)
+            score += min(mom * 1.0, 6)
+
+        # --- Dormant / coiling signals ---
+        # Volume dry-up: sellers exhausted, volume contracting (0-7)
+        # Strongest signal when recent volume is 40-70% below average
+        vd = result["volume_dryup"]
+        if vd > 0.15:
+            score += min(vd * 10, 7)
+        # BB squeeze: volatility compressed (0-8)
+        if result["bb_squeeze"]:
+            score += 8
+        elif result["bb_width_contraction"] > 0.2:
+            # Partial credit for bands narrowing even if not at 10th pctile
+            score += min(result["bb_width_contraction"] * 6, 4)
+        # Flat price with tight bands = classic coil (0-4 bonus)
+        if result["bb_squeeze"] and abs(result["price_momentum_5d"]) < 3:
+            score += 4
+
+        # --- Size bias ---
+        # Small-cap bonus (0-7) — thinner float, easier to squeeze
         mc = result["market_cap"]
         if 0 < mc < 500_000_000:
             score += 7
@@ -462,7 +553,9 @@ class ShortSqueezeScanner:
     # ------------------------------------------------------------------
 
     def scan(self, tickers: List[str],
-             ftd_score_threshold: float = 25.0,
+             si_score_min: float = 10.0,
+             ftd_score_min: float = 10.0,
+             preliminary_score_min: float = 38.0,
              run_sec_sentiment: bool = True) -> pd.DataFrame:
         """Run the full multi-signal short squeeze scan.
 
@@ -470,20 +563,31 @@ class ShortSqueezeScanner:
         ----------
         tickers : list[str]
             Universe of tickers to scan.
-        ftd_score_threshold : float
-            Minimum (ftd_score + vp_score) to advance to Stage 2.
+        si_score_min : float
+            Minimum short-interest score (0-25) to advance to Stage 2.
+            Ensures every candidate has meaningful short exposure.
+        ftd_score_min : float
+            Minimum FTD score (0-20) to advance to Stage 2.
+            Ensures delivery failures confirm the short thesis.
+        preliminary_score_min : float
+            Minimum combined score (si + ftd + vp, max 80) to advance
+            to Stage 2. Controls overall signal strength.
         run_sec_sentiment : bool
             If True, run expensive LLM sentiment on filtered candidates.
+
+        Recommended defaults target ~10-15 candidates from Russell 3000.
         """
         print(f"{'='*80}")
         print(f"SHORT SQUEEZE SCANNER — {len(tickers)} tickers")
         print(f"{'='*80}")
+        print(f"Filters: si_score >= {si_score_min}, ftd_score >= {ftd_score_min}, "
+              f"preliminary >= {preliminary_score_min}")
 
-        # Stage 1: FTD + Volume/Price (cheap)
+        # Stage 1: Short Interest + FTD + Volume/Price (cheap)
         print("\n[Stage 1] Loading SEC FTD data...")
         ftd_df = self._load_recent_ftd_data(months_back=3)
 
-        print(f"[Stage 1] Computing FTD + volume/price signals for {len(tickers)} tickers...")
+        print(f"[Stage 1] Computing short interest + FTD + volume/price signals for {len(tickers)} tickers...")
         stage1_results = []
         for i, ticker in enumerate(tickers):
             if i % 50 == 0:
@@ -491,9 +595,10 @@ class ShortSqueezeScanner:
 
             vp = self.compute_volume_price_signals(ticker)
             ftd = self.compute_ftd_signals(ticker, ftd_df, avg_volume=vp.get("avg_volume", 0))
-            preliminary_score = ftd["ftd_score"] + vp["vp_score"]
+            si = self.compute_short_interest_signals(ticker)
+            preliminary_score = ftd["ftd_score"] + vp["vp_score"] + si["si_score"]
 
-            row = {"ticker": ticker, **ftd, **vp, "preliminary_score": preliminary_score}
+            row = {"ticker": ticker, **si, **ftd, **vp, "preliminary_score": preliminary_score}
             stage1_results.append(row)
             time.sleep(self.batch_delay)
 
@@ -502,19 +607,24 @@ class ShortSqueezeScanner:
             print("No results from Stage 1.")
             return df
 
-        # Filter for Stage 2
-        candidates = df[df["preliminary_score"] >= ftd_score_threshold].copy()
-        print(f"\n[Stage 1] Complete. {len(candidates)}/{len(df)} tickers passed "
-              f"threshold ({ftd_score_threshold}).")
+        # Multi-gate filter for Stage 2
+        mask = (
+            (df["si_score"] >= si_score_min) &
+            (df["ftd_score"] >= ftd_score_min) &
+            (df["preliminary_score"] >= preliminary_score_min)
+        )
+        candidates = df[mask].copy()
+        print(f"\n[Stage 1] Complete. {len(candidates)}/{len(df)} tickers passed filters.")
 
         if candidates.empty or not run_sec_sentiment:
-            # Fill SEC columns with defaults
+            # Fill SEC columns with defaults; composite = si + ftd + vp (no SEC)
             for col in ["catalyst_strength", "catalyst_summary", "float_pressure",
                         "ownership_summary", "vulnerability_level", "vulnerability_summary",
-                        "sec_score", "composite_score", "assessment", "buy_signal"]:
+                        "sec_score", "assessment", "buy_signal"]:
                 candidates[col] = "" if col.endswith("summary") or col == "assessment" else (
                     False if col == "buy_signal" else 0.0 if "score" in col else "none"
                 )
+            candidates["composite_score"] = candidates["preliminary_score"]
             return candidates.sort_values("preliminary_score", ascending=False).reset_index(drop=True)
 
         # Stage 2: SEC sentiment (expensive, filtered only)
@@ -532,8 +642,8 @@ class ShortSqueezeScanner:
 
         # Composite score
         candidates["composite_score"] = (
-            candidates["ftd_score"] + candidates["vp_score"] +
-            candidates["sec_score"].fillna(0)
+            candidates["si_score"].fillna(0) + candidates["ftd_score"] +
+            candidates["vp_score"] + candidates["sec_score"].fillna(0)
         ).clip(upper=100).round(2)
 
         # Stage 3: LLM consolidation
@@ -543,12 +653,17 @@ class ShortSqueezeScanner:
         for _, row in candidates.iterrows():
             signals = {
                 "ticker": row["ticker"],
+                "short_pct_float": row.get("short_pct_float", 0),
+                "days_to_cover": row.get("days_to_cover", 0),
+                "short_interest_change_pct": row.get("short_interest_change", 0),
+                "si_score": row.get("si_score", 0),
                 "ftd_score": row["ftd_score"],
                 "ftd_ratio": row["ftd_ratio"],
                 "ftd_trend": row["ftd_trend"],
                 "ftd_days_with_fails": row["ftd_days_with_fails"],
                 "vp_score": row["vp_score"],
                 "volume_spike_ratio": row["volume_spike_ratio"],
+                "volume_dryup": row.get("volume_dryup", 0),
                 "bb_squeeze": row["bb_squeeze"],
                 "price_momentum_5d": row["price_momentum_5d"],
                 "price_momentum_10d": row["price_momentum_10d"],
@@ -568,10 +683,12 @@ class ShortSqueezeScanner:
         # Final ordering
         col_order = [
             "ticker", "price", "market_cap",
+            "short_pct_float", "days_to_cover", "short_interest_change",
+            "shares_short", "si_score",
             "ftd_total_fails", "ftd_avg_daily_fails", "ftd_ratio", "ftd_trend", "ftd_score",
-            "volume_spike_ratio", "relative_volume_5d",
+            "volume_spike_ratio", "relative_volume_5d", "volume_dryup",
             "price_momentum_5d", "price_momentum_10d",
-            "bb_width", "bb_squeeze", "vp_score",
+            "bb_width", "bb_squeeze", "bb_width_contraction", "vp_score",
             "catalyst_strength", "float_pressure", "vulnerability_level", "sec_score",
             "composite_score", "assessment", "buy_signal",
         ]

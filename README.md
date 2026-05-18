@@ -52,6 +52,7 @@ Use your own judgment or consult with a qualified professional before making any
 | **Companies_competitive_relationship** | Extract and visualize self-reported competitive relationships between companies using SEC 10-K filings with AI-powered analysis and network graphs |
 | **Fundamental_analysis** | Standalone SEC 10-K/10-Q report generator — given a list of tickers, runs LLM-powered filing analysis and exports results with sentiment (positive/neutral/negative) to Excel |
 | **short_squeeze_detection** | Statistical signals for identifying potential short-squeeze candidates |
+| **x_bagger_finder** | Find historical 10x/100x/1000x stocks via yfinance, extract winner patterns via LLM web search + SEC filings, then score the current SEC universe against the pattern |
 
 ---
 
@@ -238,6 +239,8 @@ A comprehensive Python package for quantitative finance analysis:
 | **utils** | Advanced name matching and canonicalization for company deduplication |
 | **montecarlo** | Abstract base classes for Monte Carlo simulation strategies |
 | **edgar_pipeline** | End-to-end workflows for collecting, processing, and analysing financial data |
+| **short_squeeze** | Multi-signal short-squeeze scanner combining short interest (yfinance), SEC FTD data, volume/price technicals, and LLM filing sentiment |
+| **x_bagger** | Four-stage pipeline that finds historical X-bagger stocks, extracts their common patterns via LLM, and scores current stocks against that fingerprint |
 
 ### To be implemented
 - Revenue growth filter

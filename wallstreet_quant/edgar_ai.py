@@ -513,6 +513,213 @@ def short_vulnerability_assessment(section_text: str, model: str = "gpt-5.2-pro"
     return output
 
 
+# ---------- 13. X-Bagger: Winner Business Model & Moat (web search) ----------
+class WinnerBusinessModel(BaseModel):
+    business_model: str
+    moat: str
+    sector: str
+    industry: str
+    customer_type: str  # B2B, B2C, B2G, mixed
+    key_products: List[str]
+    competitive_position: str  # leader, challenger, niche, follower
+    summary: str
+
+
+def winner_business_model_analysis(ticker: str, model: str = "gpt-5.2-pro") -> WinnerBusinessModel:
+    """Use web search to characterize a historical X-bagger's business model and moat."""
+    query = f"""
+    Research the company with ticker {ticker}. Describe its current business model,
+    economic moat, sector and industry, customer type, key products/services, and
+    competitive position.
+    """
+    instructions = """You are an equity analyst building a profile of historical multi-bagger stocks.
+    For the given ticker, search the web to identify:
+    - business_model: how the company makes money (one paragraph)
+    - moat: the durable competitive advantage (network effects, switching costs, IP, scale, brand, etc.)
+    - sector / industry: GICS-style classification
+    - customer_type: B2B, B2C, B2G, or mixed
+    - key_products: list of major products or service lines
+    - competitive_position: leader, challenger, niche, or follower
+    - summary: 2-3 sentence synthesis
+    Be concrete and specific. Avoid marketing fluff.
+    """
+    with warnings.catch_warnings():
+        warnings.filterwarnings("ignore", message="Pydantic serializer warnings")
+        resp = client.responses.parse(
+            model=model,
+            tools=[{"type": "web_search_preview", "search_context_size": "low"}],
+            input=query,
+            instructions=instructions,
+            text_format=WinnerBusinessModel,
+        )
+    return resp.output_parsed
+
+
+# ---------- 14. X-Bagger: Inflection-Point Analysis (SEC filings) ----------
+class WinnerInflection(BaseModel):
+    key_catalyst: str
+    financial_signature: str  # e.g. "revenue tripled, op margin from -10% to +20%"
+    management_changes: str
+    pre_run_market_cap_estimate: str  # e.g. "small cap (~$500M)"
+    summary: str
+
+
+def winner_inflection_analysis(ticker: str, filing_text: str, trough_date: str, peak_date: str,
+                               model: str = "gpt-5.2-pro") -> WinnerInflection:
+    """Analyze SEC filing text from around the trough date to identify the inflection driving the run."""
+    prompt = f"""
+    Ticker {ticker} grew dramatically between {trough_date} and {peak_date}. The text below
+    is from an SEC filing near the start of that run. Identify what was happening at the
+    company that explains the subsequent multi-bagger move.
+
+    Extract:
+    - key_catalyst: the single most important driver of the run (one sentence)
+    - financial_signature: the quantitative pattern (revenue growth rate, margin trajectory,
+      free cash flow inflection, etc.) — be specific with numbers if available
+    - management_changes: any new CEO, founder return, or significant leadership shift
+    - pre_run_market_cap_estimate: rough size at start of run (micro / small / mid / large cap)
+    - summary: 2-3 sentence synthesis
+
+    FILING TEXT:
+    {filing_text}
+    """
+    output = client.responses.parse(
+        model=model,
+        input=[
+            {"role": "system", "content": "You are an equity analyst studying historical multi-bagger stocks. "
+             "Your task is to identify the operational and financial inflection points that explain "
+             "why these stocks went on dramatic runs. Be specific and avoid generic narratives."},
+            {"role": "user", "content": prompt},
+        ],
+        text_format=WinnerInflection,
+    ).output_parsed
+    return output
+
+
+# ---------- 15. X-Bagger: Macro / Sector Context (web search) ----------
+class WinnerMarketContext(BaseModel):
+    macro_tailwinds: List[str]
+    sector_tailwinds: List[str]
+    technology_or_paradigm_shift: str  # e.g. "smartphone adoption", "cloud migration", "AI compute"
+    summary: str
+
+
+def winner_market_context(ticker: str, trough_date: str, peak_date: str,
+                          model: str = "gpt-5.2-pro") -> WinnerMarketContext:
+    """Use web search to identify macro/sector tailwinds during the multi-bagger run."""
+    query = f"""
+    During the period {trough_date} to {peak_date}, the stock {ticker} experienced a
+    dramatic multi-bagger run. Research what macro and sector trends were happening
+    during that period that may have benefited this company.
+    """
+    instructions = """You are an equity analyst building a profile of historical multi-bagger stocks.
+    Identify the broader market context during the specified period:
+    - macro_tailwinds: relevant macroeconomic conditions (rates, fiscal policy, monetary regime, etc.)
+    - sector_tailwinds: industry-specific trends benefiting this company
+    - technology_or_paradigm_shift: any major technology or paradigm shift this company rode
+    - summary: 2-3 sentence synthesis
+    Be specific with named trends rather than generic statements like "favorable conditions".
+    """
+    with warnings.catch_warnings():
+        warnings.filterwarnings("ignore", message="Pydantic serializer warnings")
+        resp = client.responses.parse(
+            model=model,
+            tools=[{"type": "web_search_preview", "search_context_size": "low"}],
+            input=query,
+            instructions=instructions,
+            text_format=WinnerMarketContext,
+        )
+    return resp.output_parsed
+
+
+# ---------- 16. X-Bagger: Pattern Consolidation ----------
+class WinnerPatterns(BaseModel):
+    common_sectors: List[str]
+    common_moats: List[str]
+    common_inflection_signatures: List[str]
+    common_pre_run_traits: List[str]  # e.g. "small-cap < $1B", "founder-led", "operating losses but accelerating revenue"
+    common_macro_themes: List[str]
+    meta_pattern: str  # free-text summary of the overall pattern
+
+
+def consolidate_winner_patterns(winner_profiles_json: str,
+                                model: str = "o3") -> WinnerPatterns:
+    """Synthesize many winner profiles into a single pattern fingerprint."""
+    prompt = f"""
+    Below is a JSON list of profiles for stocks that experienced dramatic multi-bagger runs.
+    Each profile contains the company's business model, moat, inflection-point analysis, and
+    market context.
+
+    Synthesize the recurring patterns across these winners. Identify:
+    - common_sectors: sectors/industries that produced multiple winners
+    - common_moats: types of competitive advantage that recurred
+    - common_inflection_signatures: financial or operational inflection patterns that recurred
+    - common_pre_run_traits: characteristics shared by winners BEFORE the run started
+      (size, profitability state, ownership structure, etc.)
+    - common_macro_themes: macro/technology themes that produced multiple winners
+    - meta_pattern: a free-text 4-6 sentence summary describing the overall multi-bagger
+      pattern, written so it can be applied to screen current stocks
+
+    Be concrete. Use specific traits rather than generic phrases.
+
+    WINNER PROFILES (JSON):
+    {winner_profiles_json}
+    """
+    output = client.responses.parse(
+        model=model,
+        input=[
+            {"role": "system", "content": "You are a senior equity research analyst. Your task is to extract "
+             "actionable, recurring patterns from a sample of historical multi-bagger stocks. The output "
+             "will be used to screen current stocks for similar setups. Be rigorous and specific."},
+            {"role": "user", "content": prompt},
+        ],
+        text_format=WinnerPatterns,
+    ).output_parsed
+    return output
+
+
+# ---------- 17. X-Bagger: Forward Screener ----------
+class XBaggerScore(BaseModel):
+    score: int  # 0-100
+    matched_traits: List[str]
+    missing_traits: List[str]
+    reasoning: str
+
+
+def score_against_pattern(ticker: str, patterns_json: str,
+                          model: str = "gpt-5.2-pro") -> XBaggerScore:
+    """Score a current stock against the historical X-bagger pattern using web search."""
+    query = f"""
+    Research the current state of the company with ticker {ticker}: its business model,
+    sector, recent financials, market cap, ownership, and any known catalysts. Then score
+    how well it matches the historical multi-bagger pattern described in the instructions.
+    """
+    instructions = f"""You are an equity analyst screening for potential future multi-bagger stocks.
+
+    Below is a "WINNER PATTERN" extracted from historical multi-bagger stocks. Your task is to
+    research the given ticker via web search and score (0-100) how well it currently matches
+    this pattern. List the specific traits that match and the ones that are missing.
+
+    Be conservative. A high score (>70) requires multiple strong matches, especially on
+    pre-run traits and moat. A low score (<30) means the company is clearly mismatched
+    (e.g., already mega-cap when the pattern requires small-cap, or in a sector that has
+    not produced winners).
+
+    WINNER PATTERN:
+    {patterns_json}
+    """
+    with warnings.catch_warnings():
+        warnings.filterwarnings("ignore", message="Pydantic serializer warnings")
+        resp = client.responses.parse(
+            model=model,
+            tools=[{"type": "web_search_preview", "search_context_size": "low"}],
+            input=query,
+            instructions=instructions,
+            text_format=XBaggerScore,
+        )
+    return resp.output_parsed
+
+
 # Example usage:
 #risk = risk_factor_analysis(prev['1A'], last['1A'], model="gpt-4o")
 #mdad = mdad_analysis(last['7'], model="gpt-4o")
